@@ -36,7 +36,7 @@ input {
   --main-panel-width: var(--main-default-width);
   width: 100vw;
   height: 100vh;
-  min-width: var(--main-default-width);
+  min-width: 0;
   min-height: 520px;
   display: grid;
   grid-template-rows: 28px 1fr;
@@ -51,6 +51,7 @@ input {
 }
 
 .drag-bar {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -60,17 +61,23 @@ input {
 }
 
 .drag-title {
+  flex: 1 1 auto;
   min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  overflow: hidden;
   color: #d8eeec;
   font-size: 12px;
   letter-spacing: 0;
 }
 
 .drag-title > span:first-child {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -87,8 +94,9 @@ input {
 }
 
 .connection-status-text {
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: min(260px, 45vw);
+  max-width: none;
   overflow: hidden;
   color: rgba(188, 198, 200, 0.72);
   text-overflow: ellipsis;
@@ -101,6 +109,7 @@ input {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  margin-left: 8px;
 }
 
 .icon-button {

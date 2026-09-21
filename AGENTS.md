@@ -46,9 +46,9 @@ ws://127.0.0.1:17878
 当前发布产物：
 
 - `src-tauri/target/release/danmu-tools.exe`
-- `src-tauri/target/release/bundle/nsis/DanmuTools_0.1.0_x64-setup.exe`
-- `src-tauri/target/release/bundle/msi/DanmuTools_0.1.0_x64_en-US.msi`
-- `src-tauri/target/release/bundle/portable/DanmuTools_0.1.0_x64_portable.zip`
+- `src-tauri/target/release/bundle/nsis/DanmuTools_1.2.1_x64-setup.exe`
+- `src-tauri/target/release/bundle/msi/DanmuTools_1.2.1_x64_zh-CN.msi`
+- `src-tauri/target/release/bundle/portable/DanmuTools_1.2.1_x64_portable.zip`
 
 ## 开发约定
 

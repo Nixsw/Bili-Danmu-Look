@@ -20,6 +20,8 @@ use tauri::{
     Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
+const APP_DISPLAY_TITLE: &str = "读弹幕工具 - 小小鱼";
+
 pub struct AppState {
     pub inner: Arc<Mutex<RuntimeState>>,
     pub ws_task: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
@@ -178,7 +180,13 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
     TrayIconBuilder::new()
         .menu(&menu)
-        .tooltip("DanmuTools")
+        .icon(
+            app.default_window_icon()
+                .cloned()
+                .expect("configured default window icon should exist"),
+        )
+        .tooltip(APP_DISPLAY_TITLE)
+        .title(APP_DISPLAY_TITLE)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -216,5 +224,10 @@ mod tests {
         assert_eq!(ids, vec!["show", "settings", "quit"]);
         assert!(!ids.contains(&"disconnect"));
         assert!(!ids.contains(&"reconnect"));
+    }
+
+    #[test]
+    fn tray_uses_requested_display_title() {
+        assert_eq!(APP_DISPLAY_TITLE, "读弹幕工具 - 小小鱼");
     }
 }

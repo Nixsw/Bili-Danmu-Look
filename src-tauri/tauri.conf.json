@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DanmuTools",
-  "version": "0.1.0",
+  "version": "1.2.1",
   "identifier": "com.danmutools.viewer",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "npm run patch:winres",
     "frontendDist": "../dist"
   },
   "app": {
@@ -34,9 +35,17 @@
     "active": true,
     "icon": ["icons/icon.ico"],
     "targets": ["nsis", "msi"],
+    "publisher": "小小鱼（QQ：521573）",
+    "copyright": "莫要用于任何商业或违法用途。否则造成的一切后果自负。与作者(鱼刺)和逆向思维工作室无关。",
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      },
+      "wix": {
+        "language": "zh-CN"
+      },
+      "nsis": {
+        "languages": ["SimpChinese"]
       }
     }
   }
