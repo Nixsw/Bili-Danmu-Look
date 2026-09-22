@@ -9,11 +9,11 @@ import {
 
 describe("isPersonPanelVisible", () => {
   test("shows the person panel by default even before a UID is selected", () => {
-    expect(isPersonPanelVisible(false, null)).toBe(true);
+    expect(isPersonPanelVisible()).toBe(true);
   });
 
-  test("hides the person panel only when it is collapsed", () => {
-    expect(isPersonPanelVisible(true, "100000001")).toBe(false);
+  test("keeps the person panel visible as a permanent layout column", () => {
+    expect(isPersonPanelVisible()).toBe(true);
   });
 });
 

@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  ChevronsLeft,
-  ChevronsRight,
   LocateFixed,
   Minus,
   Settings
@@ -25,14 +23,8 @@ import {
   getGuardMedalIconUrl,
   getWealthMedalUrl
 } from "./ui/biliBadges";
-import { getPersonPanelWindowResizePlan } from "./ui/panelWindow";
-import {
-  getEffectivePanelCollapsed,
-  getPanelTransitionClassName
-} from "./ui/panelTransition";
 import {
   getMainUnreadAnchorAction,
-  getPersonPanelToggleIcon,
   getWindowDismissAction
 } from "./ui/windowActions";
 import {
@@ -81,7 +73,6 @@ export default function App() {
     connectApiUrl: "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect",
     opacity: 0.82,
     fontSize: 14,
-    panelCollapsed: false,
     personHistoryCount: 1
   });
   const [connectApiUrlDraft, setConnectApiUrlDraft] = useState(
@@ -106,10 +97,6 @@ export default function App() {
     null
   );
   const [splitDragging, setSplitDragging] = useState(false);
-  const [pendingPanelCollapsed, setPendingPanelCollapsed] = useState<
-    boolean | null
-  >(null);
-  const [panelGeometryChanging, setPanelGeometryChanging] = useState(false);
   const [messageContextMenu, setMessageContextMenu] =
     useState<MessageContextMenuState | null>(null);
 
@@ -226,14 +213,7 @@ export default function App() {
     };
   }, []);
 
-  const effectivePanelCollapsed = getEffectivePanelCollapsed(
-    config.panelCollapsed,
-    pendingPanelCollapsed
-  );
-  const personVisible = isPersonPanelVisible(
-    effectivePanelCollapsed,
-    snapshot.personPanel.selectedUid
-  );
+  const personVisible = isPersonPanelVisible();
   const splitLayout = useMemo(
     () =>
       getSplitLayout({
@@ -249,8 +229,6 @@ export default function App() {
   const mainMeasurementKey = snapshot.mainVisible
     .map((message) => message.messageId)
     .join(":");
-  const personWindowVisibleRef = useRef(false);
-
   useEffect(() => {
     const element = contentGridRef.current;
     if (!element) {
@@ -274,23 +252,6 @@ export default function App() {
       observer.disconnect();
     };
   }, []);
-
-  useEffect(() => {
-    if (panelGeometryChanging || pendingPanelCollapsed !== null) {
-      return;
-    }
-
-    if (personVisible) {
-      personWindowVisibleRef.current = true;
-    } else if (config.panelCollapsed) {
-      personWindowVisibleRef.current = false;
-    }
-  }, [
-    config.panelCollapsed,
-    panelGeometryChanging,
-    pendingPanelCollapsed,
-    personVisible
-  ]);
 
   useEffect(() => {
     const list = mainListRef.current;
@@ -404,6 +365,10 @@ export default function App() {
     snapshot.mainVisible.length,
     lastMainViewportSizeRef.current
   );
+  const personListFilled = shouldDistributeViewportSlack(
+    snapshot.personPanel.visibleMessages.length,
+    lastPersonViewportSizeRef.current
+  );
   const connectionStatusText = formatTransientConnectionStatus(
     snapshot.connectionStatus,
     retryDeadlineMs,
@@ -411,7 +376,6 @@ export default function App() {
     statusNowMs
   );
   const mainUnreadAnchorAction = getMainUnreadAnchorAction();
-  const personPanelToggleIcon = getPersonPanelToggleIcon(personVisible);
   const windowDismissAction = getWindowDismissAction();
 
   const updateConfig = async (patch: Partial<DisplayConfig>) => {
@@ -433,63 +397,10 @@ export default function App() {
     }
   };
 
-  const resizeWindowForPersonPanel = async (nextVisible: boolean) => {
-    if (!isTauriRuntime()) {
-      return;
-    }
-
-    const window = getCurrentWindow();
-    const [position, outerSize, innerSize, scaleFactor] = await Promise.all([
-      window.outerPosition(),
-      window.outerSize(),
-      window.innerSize(),
-      window.scaleFactor()
-    ]);
-    const plan = getPersonPanelWindowResizePlan({
-      currentVisible: personWindowVisibleRef.current,
-      nextVisible,
-      x: position.x,
-      outerWidth: outerSize.width,
-      outerHeight: outerSize.height,
-      innerWidth: innerSize.width,
-      scaleFactor
-    });
-
-    if (!plan) {
-      return;
-    }
-
-    setContentWidth(plan.contentWidth);
-    await client.setMainWindowGeometry({
-      x: plan.x,
-      y: position.y,
-      width: plan.width,
-      height: plan.height
-    });
-    personWindowVisibleRef.current = nextVisible;
-  };
-
-  const updatePersonPanelCollapsed = async (panelCollapsed: boolean) => {
-    const nextVisible = !panelCollapsed;
-    setPendingPanelCollapsed(panelCollapsed);
-    setPanelGeometryChanging(true);
-
-    try {
-      await nextAnimationFrame();
-      await resizeWindowForPersonPanel(nextVisible).catch(() => undefined);
-      await updateConfig({ panelCollapsed });
-    } finally {
-      await nextAnimationFrame();
-      setPendingPanelCollapsed(null);
-      setPanelGeometryChanging(false);
-    }
-  };
-
   const onMainMessageClick = async (message: DanmuMessage) => {
     setMessageContextMenu(null);
     await client.selectUserAnchor(message.messageId);
     await client.ackMessage(message.messageId);
-    await updatePersonPanelCollapsed(false);
   };
 
   const onPersonMessageClick = async (message: DanmuMessage) => {
@@ -520,11 +431,6 @@ export default function App() {
   const ackUserFromContextMenu = async (uid: string) => {
     await client.ackUserMessages(uid);
     setMessageContextMenu(null);
-  };
-
-  const collapsePersonPanelFromContextMenu = async () => {
-    setMessageContextMenu(null);
-    await updatePersonPanelCollapsed(true);
   };
 
   const wheelToViewportDelta = (event: React.WheelEvent<HTMLElement>) => {
@@ -651,19 +557,6 @@ export default function App() {
           </button>
           <button
             className="icon-button"
-            title={personVisible ? "收起指定人记录" : "展开指定人记录"}
-            onClick={() =>
-              updatePersonPanelCollapsed(!effectivePanelCollapsed)
-            }
-          >
-            {personPanelToggleIcon === "chevronsLeft" ? (
-              <ChevronsLeft size={15} />
-            ) : (
-              <ChevronsRight size={15} />
-            )}
-          </button>
-          <button
-            className="icon-button"
             title="设置"
             onClick={() => setSettingsOpen((value) => !value)}
           >
@@ -741,15 +634,10 @@ export default function App() {
 
       <section
         ref={contentGridRef}
-        className={getPanelTransitionClassName({
-          personVisible,
-          splitDragging,
-          panelGeometryChanging
-        })}
+        className={`content-grid ${splitDragging ? "is-splitting" : ""}`}
       >
         <aside
           className="person-panel"
-          data-visible={personVisible}
           onMouseEnter={() => client.setPersonPanelHover(true)}
           onMouseLeave={() => client.setPersonPanelHover(false)}
           onWheel={onPersonWheel}
@@ -763,15 +651,11 @@ export default function App() {
               </span>
               <strong>{snapshot.personPanel.selectedNickname ?? "未选择"}</strong>
             </div>
-            <button
-              className="icon-button"
-              title="收起"
-              onClick={() => updatePersonPanelCollapsed(true)}
-            >
-              <ChevronsRight size={15} />
-            </button>
           </div>
-          <div className="person-list" ref={personListRef}>
+          <div
+            className={`person-list ${personListFilled ? "is-filled" : ""}`}
+            ref={personListRef}
+          >
             {snapshot.personPanel.visibleMessages.map((message) => (
               <button
                 className={`person-row ${message.read ? "is-read" : ""} ${
@@ -797,11 +681,15 @@ export default function App() {
               </button>
             ))}
           </div>
-          {snapshot.personPanel.hiddenNewerCount > 0 && (
-            <div className="newer-tip">
-              还有 {snapshot.personPanel.hiddenNewerCount} 条更新
-            </div>
-          )}
+          <div
+            className="newer-tip"
+            data-visible={snapshot.personPanel.hiddenNewerCount > 0}
+            aria-hidden={snapshot.personPanel.hiddenNewerCount === 0}
+          >
+            {snapshot.personPanel.hiddenNewerCount > 0
+              ? `还有 ${snapshot.personPanel.hiddenNewerCount} 条更新`
+              : null}
+          </div>
         </aside>
 
         {personVisible && (
@@ -849,15 +737,15 @@ export default function App() {
               </button>
             ))}
           </div>
-          {snapshot.mainHiddenNewerCount > 0 && (
-            <button
-              type="button"
-              className="newer-tip main-newer-tip"
-              onClick={onMainNewerTipClick}
-            >
-              还有 {snapshot.mainHiddenNewerCount} 条更新
-            </button>
-          )}
+          <div
+            className="newer-tip main-newer-tip"
+            data-visible={snapshot.mainHiddenNewerCount > 0}
+            aria-hidden={snapshot.mainHiddenNewerCount === 0}
+          >
+            {snapshot.mainHiddenNewerCount > 0
+              ? `还有 ${snapshot.mainHiddenNewerCount} 条更新`
+              : null}
+          </div>
         </section>
       </section>
 
@@ -891,9 +779,6 @@ export default function App() {
               <button onClick={() => ackUserFromContextMenu(messageContextMenu.message.uid)}>
                 {getMessageContextMenuLabels("person")[1]}
               </button>
-              <button onClick={collapsePersonPanelFromContextMenu}>
-                {getMessageContextMenuLabels("person")[2]}
-              </button>
             </>
           )}
         </div>
@@ -925,12 +810,6 @@ async function copyText(text: string) {
   textarea.select();
   document.execCommand("copy");
   textarea.remove();
-}
-
-function nextAnimationFrame() {
-  return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => resolve());
-  });
 }
 
 function SuperChatBadge({

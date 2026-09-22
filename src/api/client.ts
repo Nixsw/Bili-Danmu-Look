@@ -8,7 +8,6 @@ export interface DisplayConfig {
   connectApiUrl: string;
   opacity: number;
   fontSize: number;
-  panelCollapsed: boolean;
   personHistoryCount: number;
 }
 
@@ -46,19 +45,12 @@ export interface DanmuClient {
     mainViewportSize?: number;
     personViewportSize?: number;
   }): Promise<void>;
-  setMainWindowGeometry(geometry: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }): Promise<void>;
 }
 
 const defaultConfig: DisplayConfig = {
   connectApiUrl: "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect",
   opacity: 0.82,
   fontSize: 14,
-  panelCollapsed: false,
   personHistoryCount: 1
 };
 const BROWSER_MOCK_WS_URL = "ws://127.0.0.1:17878";
@@ -115,9 +107,7 @@ function createTauriClient(): DanmuClient {
       invoke<void>("jump_main_viewport_to_unread"),
     scrollPersonViewport: (delta) =>
       invoke<void>("scroll_person_viewport", { delta }),
-    setViewportSizes: (sizes) => invoke<void>("set_viewport_sizes", sizes),
-    setMainWindowGeometry: (geometry) =>
-      invoke<void>("set_main_window_geometry", geometry)
+    setViewportSizes: (sizes) => invoke<void>("set_viewport_sizes", sizes)
   };
 }
 
@@ -241,9 +231,6 @@ function createBrowserFallbackClient(): DanmuClient {
     async setViewportSizes(sizes) {
       store.setViewportSizes(sizes);
       emit();
-    },
-    async setMainWindowGeometry() {
-      return;
     }
   };
 

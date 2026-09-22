@@ -10,8 +10,7 @@ const MAIN_MESSAGE_CONTEXT_MENU_LABELS = [
 
 const PERSON_MESSAGE_CONTEXT_MENU_LABELS = [
   "复制弹幕",
-  "全部已读",
-  "收起"
+  "全部已读"
 ] as const;
 
 export function getMessageContextMenuLabels(scope: MessageContextMenuScope) {

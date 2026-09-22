@@ -14,11 +14,8 @@ export interface SplitLayout {
   mainWidth: number;
 }
 
-export function isPersonPanelVisible(
-  panelCollapsed: boolean,
-  _selectedUid: string | null
-) {
-  return !panelCollapsed;
+export function isPersonPanelVisible() {
+  return true;
 }
 
 export function getSplitLayout({
