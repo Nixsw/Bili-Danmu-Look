@@ -86,6 +86,7 @@ fn ensure_main_window(app: &tauri::App) -> tauri::Result<()> {
         .min_inner_size(420.0, 520.0)
         .decorations(false)
         .transparent(true)
+        .shadow(false)
         .visible(false)
         .always_on_top(true)
         .resizable(true)
@@ -229,5 +230,14 @@ mod tests {
     #[test]
     fn tray_uses_requested_display_title() {
         assert_eq!(APP_DISPLAY_TITLE, "读弹幕工具 - 小小鱼");
+    }
+
+    #[test]
+    fn main_window_config_disables_native_shadow() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json"))
+                .expect("tauri config should be valid JSON");
+
+        assert_eq!(config["app"]["windows"][0]["shadow"], false);
     }
 }
