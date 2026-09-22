@@ -9,8 +9,8 @@ use app_config::{load_config, save_window_position, save_window_size};
 use commands::{
     ack_message, ack_user_messages, connect_ws, disconnect_ws, get_config, get_snapshot,
     jump_main_viewport_to_unread, probe_bilibili_connection, reconnect_ws, scroll_main_viewport,
-    scroll_person_viewport, select_user_anchor, set_main_window_geometry, set_person_panel_hover,
-    set_viewport_sizes, update_config,
+    scroll_person_viewport, select_user_anchor, set_person_panel_hover, set_viewport_sizes,
+    update_config,
 };
 use std::sync::{Arc, Mutex};
 use store::MessageStore;
@@ -68,8 +68,7 @@ pub fn run() {
             scroll_main_viewport,
             jump_main_viewport_to_unread,
             scroll_person_viewport,
-            set_viewport_sizes,
-            set_main_window_geometry
+            set_viewport_sizes
         ])
         .run(tauri::generate_context!())
         .expect("failed to run DanmuTools");

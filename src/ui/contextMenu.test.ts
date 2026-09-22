@@ -17,8 +17,7 @@ describe("getMessageContextMenuLabels", () => {
   test("uses the compact action menu for selected-person messages", () => {
     expect(getMessageContextMenuLabels("person")).toEqual([
       "复制弹幕",
-      "全部已读",
-      "收起"
+      "全部已读"
     ]);
   });
 });

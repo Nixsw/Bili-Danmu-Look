@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const MIN_WINDOW_WIDTH: u32 = 420;
 const MAIN_DEFAULT_WIDTH: u32 = 420;
 const PERSON_PANEL_WIDTH: u32 = 180;
 const DEFAULT_WINDOW_WIDTH: u32 = MAIN_DEFAULT_WIDTH + PERSON_PANEL_WIDTH;
@@ -17,6 +16,7 @@ pub struct AppConfig {
     pub connect_api_url: String,
     pub opacity: f64,
     pub font_size: u8,
+    /// Legacy persisted field; always normalized to false because the person panel is permanent.
     pub panel_collapsed: bool,
     pub person_history_count: u8,
     pub window_x: Option<i32>,
@@ -34,6 +34,7 @@ pub struct ConfigPatch {
     pub connect_api_url: Option<String>,
     pub opacity: Option<f64>,
     pub font_size: Option<u8>,
+    /// Legacy patch field; accepted for config compatibility but ignored.
     pub panel_collapsed: Option<bool>,
     pub person_history_count: Option<u8>,
 }
@@ -71,7 +72,7 @@ pub fn save_window_size(
     height: u32,
     mut config: AppConfig,
 ) -> Result<AppConfig, String> {
-    if !should_persist_window_size_for_panel(width, height, config.panel_collapsed) {
+    if !should_persist_window_size(width, height) {
         return Ok(config);
     }
     config.window_width = Some(width);
@@ -82,6 +83,8 @@ pub fn save_window_size(
 
 impl AppConfig {
     pub fn apply_patch(&mut self, patch: ConfigPatch) {
+        self.panel_collapsed = false;
+
         if let Some(value) = patch.connect_api_url {
             if is_http_connect_api_url(&value) {
                 self.connect_api_url = value;
@@ -93,15 +96,14 @@ impl AppConfig {
         if let Some(value) = patch.font_size {
             self.font_size = value.clamp(12, 18);
         }
-        if let Some(value) = patch.panel_collapsed {
-            self.panel_collapsed = value;
-        }
         if let Some(value) = patch.person_history_count {
             self.person_history_count = value.min(3);
         }
     }
 
     pub fn sanitize_window_geometry(&mut self) {
+        self.panel_collapsed = false;
+
         if !is_http_connect_api_url(&self.connect_api_url) {
             self.connect_api_url = default_connect_api_url();
         }
@@ -114,7 +116,7 @@ impl AppConfig {
         }
 
         if let (Some(width), Some(height)) = (self.window_width, self.window_height) {
-            if !should_persist_window_size_for_panel(width, height, self.panel_collapsed) {
+            if !should_persist_window_size(width, height) {
                 self.window_width = None;
                 self.window_height = None;
             }
@@ -152,14 +154,6 @@ fn should_persist_window_position(x: i32, y: i32) -> bool {
 }
 
 fn should_persist_window_size(width: u32, height: u32) -> bool {
-    width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT
-}
-
-fn should_persist_window_size_for_panel(width: u32, height: u32, panel_collapsed: bool) -> bool {
-    if panel_collapsed {
-        return should_persist_window_size(width, height);
-    }
-
     width >= DEFAULT_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT
 }
 
@@ -222,7 +216,7 @@ mod tests {
             ),
             opacity: Some(2.0),
             font_size: Some(3),
-            panel_collapsed: Some(false),
+            panel_collapsed: Some(true),
             person_history_count: Some(9),
         });
 
@@ -284,6 +278,7 @@ mod tests {
     #[test]
     fn sanitizes_hidden_window_geometry_from_loaded_config() {
         let mut config = AppConfig {
+            panel_collapsed: true,
             window_x: Some(-32000),
             window_y: Some(-32000),
             window_width: Some(144),
@@ -297,5 +292,6 @@ mod tests {
         assert_eq!(config.window_y, None);
         assert_eq!(config.window_width, None);
         assert_eq!(config.window_height, None);
+        assert!(!config.panel_collapsed);
     }
 }
