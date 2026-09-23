@@ -49,6 +49,7 @@ export interface DanmuMessage {
 export interface PersonPanelSnapshot {
   selectedUid: string | null;
   selectedNickname: string | null;
+  selectedGuardType: GuardType | null;
   anchorMessageId: number | null;
   hoverFrozen: boolean;
   visibleMessages: DanmuMessage[];

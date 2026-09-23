@@ -63,6 +63,7 @@ pub struct DanmuMessage {
 pub struct PersonPanelSnapshot {
     pub selected_uid: Option<String>,
     pub selected_nickname: Option<String>,
+    pub selected_guard_type: Option<u8>,
     pub anchor_message_id: Option<u64>,
     pub hover_frozen: bool,
     pub visible_messages: Vec<DanmuMessage>,

@@ -16,6 +16,35 @@ const baseRaw = (overrides: Partial<IncomingDanmuRaw> = {}): IncomingDanmuRaw =>
   ...overrides
 });
 
+describe("person panel identity", () => {
+  it("keeps the latest nickname and guard identity together while browsing history or switching users", () => {
+    const store = createMessageStore({ mainViewportSize: 6, personViewportSize: 2 });
+    expect(store.getPersonPanel().selectedGuardType).toBeNull();
+    for (let index = 0; index < 5; index++) {
+      store.ingest(baseRaw({ nickname: "旧昵称", guardType: 3 }));
+    }
+    store.selectUserAnchor(1);
+    store.ingest(baseRaw({ nickname: "新昵称", guardType: 2 }));
+
+    const expectLatestIdentity = () => {
+      const panel = store.getPersonPanel();
+      expect(panel.selectedNickname).toBe("新昵称");
+      expect(panel.selectedGuardType).toBe(2);
+    };
+    expectLatestIdentity();
+    expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).not.toContain(6);
+    store.scrollPersonViewport(99);
+    expectLatestIdentity();
+    store.scrollPersonViewport(-99);
+    expectLatestIdentity();
+
+    const other = store.ingest(baseRaw({ uid: 100000002, nickname: "另一位观众", guardType: 0 }));
+    store.selectUserAnchor(other.messageId);
+    expect(store.getPersonPanel().selectedNickname).toBe("另一位观众");
+    expect(store.getPersonPanel().selectedGuardType).toBe(0);
+  });
+});
+
 describe("normalizeIncomingDanmu", () => {
   it("normalizes uid and millisecond timestamps", () => {
     const msg = normalizeIncomingDanmu(baseRaw({ uid: "9007199254740993" }), 7);

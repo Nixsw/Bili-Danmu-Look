@@ -202,6 +202,50 @@ export function createMessageStore(options: MessageStoreOptions) {
       }
     },
 
+    clearReadMessages() {
+      let removedCount = 0;
+      for (let index = messages.length - 1; index >= 0; index--) {
+        const message = messages[index];
+        if (!message.read) continue;
+        messages.splice(index, 1);
+        byId.delete(message.messageId);
+        removeMessageFromUserIndex(message);
+        if (index < mainStartIndex) mainStartIndex--;
+        removedCount++;
+      }
+      if (removedCount === 0) return 0;
+
+      // Preserve the first surviving row instead of pulling older rows into view.
+      mainStartIndex = Math.min(mainStartIndex, Math.max(0, messages.length - 1));
+      mainTopAligned = messages.length > 0;
+      mainViewportRevision++;
+      mainViewportMotion = null;
+      if (anchorMessageId !== null && !byId.has(anchorMessageId)) {
+        // Explicit cleanup may remove the anchor. Restore the nearest remaining
+        // message for this user, even if its smaller history index had evicted it.
+        const remaining = messages.filter(message => message.uid === selectedUid);
+        const next = remaining.find(message => message.messageId > anchorMessageId!) ?? remaining.at(-1);
+        if (next) api.selectUserAnchor(next.messageId);
+        else resetPersonSelection();
+      }
+      return removedCount;
+    },
+
+    clearAllMessages() {
+      const removedCount = messages.length;
+      messages.length = 0;
+      byId.clear();
+      idsByUid.clear();
+      mainStartIndex = 0;
+      mainTopAligned = false;
+      mainViewportRevision++;
+      mainViewportMotion = null;
+      resetPersonSelection();
+      // Keep connection state and monotonically increasing IDs: delayed clicks
+      // on removed rows must never mark a newly received message as read.
+      return removedCount;
+    },
+
     selectUserAnchor(messageId: number) {
       const message = byId.get(messageId);
       if (!message) {
@@ -304,6 +348,7 @@ export function createMessageStore(options: MessageStoreOptions) {
 
     getPersonPanel(): PersonPanelSnapshot {
       const userIds = getSelectedUserIds();
+      const selectedMessage = getSelectedLatestMessage();
       const visibleIds = userIds.slice(
         personStartIndex,
         personStartIndex + personViewportSize
@@ -314,7 +359,8 @@ export function createMessageStore(options: MessageStoreOptions) {
 
       return {
         selectedUid,
-        selectedNickname: getSelectedNickname(),
+        selectedNickname: selectedMessage?.nickname ?? null,
+        selectedGuardType: selectedMessage?.guardType ?? null,
         anchorMessageId,
         hoverFrozen,
         visibleMessages,
@@ -339,6 +385,14 @@ export function createMessageStore(options: MessageStoreOptions) {
       };
     }
   };
+
+  function resetPersonSelection() {
+    selectedUid = null;
+    anchorMessageId = null;
+    personStartIndex = 0;
+    personManualViewport = false;
+    hoverFrozen = false;
+  }
 
   function trimMainCapacity(protectedPersonIds: Set<number>) {
     if (messages.length < mainCapacity || messages.length <= 1) return;
@@ -461,7 +515,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     return selectedUid ? (idsByUid.get(selectedUid) ?? []) : [];
   }
 
-  function getSelectedNickname() {
+  function getSelectedLatestMessage() {
     if (!selectedUid) {
       return null;
     }
@@ -470,7 +524,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     for (let index = userIds.length - 1; index >= 0; index -= 1) {
       const message = byId.get(userIds[index]);
       if (message) {
-        return message.nickname;
+        return message;
       }
     }
 

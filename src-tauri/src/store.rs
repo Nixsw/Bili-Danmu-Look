@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 #[cfg(test)]
 mod cache_tests;
+#[cfg(test)]
+mod clear_tests;
 
 pub struct MessageStore {
     next_message_id: u64,
@@ -126,6 +128,68 @@ impl MessageStore {
         if advances_unread {
             self.align_main_to_unread(MainViewportMotion::Advance);
         }
+    }
+
+    pub fn clear_read_messages(&mut self) -> usize {
+        let mut removed_count = 0;
+        for index in (0..self.messages.len()).rev() {
+            if !self.messages[index].read {
+                continue;
+            }
+            let removed = self.messages.remove(index).expect("existing message index");
+            self.by_id.remove(&removed.message_id);
+            self.remove_message_from_user_index(&removed);
+            if index < self.main_start_index {
+                self.main_start_index -= 1;
+            }
+            removed_count += 1;
+        }
+        if removed_count == 0 {
+            return 0;
+        }
+
+        // Keep the first surviving row at the top, including short trailing pages.
+        self.main_start_index = self
+            .main_start_index
+            .min(self.messages.len().saturating_sub(1));
+        self.main_top_aligned = !self.messages.is_empty();
+        self.main_viewport_revision += 1;
+        self.main_viewport_motion = None;
+        if let Some(anchor_id) = self.anchor_message_id {
+            if !self.by_id.contains_key(&anchor_id) {
+                // Explicit cleanup can remove the anchor; the replacement may
+                // need to be restored from main history into the smaller UID index.
+                let remaining = self
+                    .messages
+                    .iter()
+                    .filter(|message| Some(&message.uid) == self.selected_uid.as_ref());
+                let next = remaining
+                    .clone()
+                    .find(|message| message.message_id > anchor_id)
+                    .or_else(|| remaining.last())
+                    .map(|message| message.message_id);
+                if let Some(message_id) = next {
+                    self.select_user_anchor(message_id);
+                } else {
+                    self.reset_person_selection();
+                }
+            }
+        }
+        removed_count
+    }
+
+    pub fn clear_all_messages(&mut self) -> usize {
+        let removed_count = self.messages.len();
+        self.messages.clear();
+        self.by_id.clear();
+        self.ids_by_uid.clear();
+        self.main_start_index = 0;
+        self.main_top_aligned = false;
+        self.main_viewport_revision += 1;
+        self.main_viewport_motion = None;
+        self.reset_person_selection();
+        // Preserve the connection and next ID so stale clicks cannot read new rows.
+        removed_count
     }
 
     pub fn select_user_anchor(&mut self, message_id: u64) {
@@ -265,6 +329,7 @@ impl MessageStore {
 
     fn person_panel(&self) -> PersonPanelSnapshot {
         let user_ids = self.selected_user_ids();
+        let selected_message = self.selected_latest_message();
         let visible_messages = user_ids
             .iter()
             .skip(self.person_start_index)
@@ -275,7 +340,8 @@ impl MessageStore {
 
         PersonPanelSnapshot {
             selected_uid: self.selected_uid.clone(),
-            selected_nickname: self.selected_nickname(),
+            selected_nickname: selected_message.map(|message| message.nickname.clone()),
+            selected_guard_type: selected_message.map(|message| message.guard_type),
             anchor_message_id: self.anchor_message_id,
             hover_frozen: self.hover_frozen,
             visible_messages,
@@ -283,6 +349,14 @@ impl MessageStore {
                 .len()
                 .saturating_sub(self.person_start_index + self.person_viewport_size),
         }
+    }
+
+    fn reset_person_selection(&mut self) {
+        self.selected_uid = None;
+        self.anchor_message_id = None;
+        self.person_start_index = 0;
+        self.person_manual_viewport = false;
+        self.hover_frozen = false;
     }
 
     fn trim_main_capacity(&mut self, protected_person_ids: &HashSet<u64>) {
@@ -447,14 +521,10 @@ impl MessageStore {
             .unwrap_or_default()
     }
 
-    fn selected_nickname(&self) -> Option<String> {
+    fn selected_latest_message(&self) -> Option<&DanmuMessage> {
         let selected_uid = self.selected_uid.as_ref()?;
         let user_ids = self.ids_by_uid.get(selected_uid)?;
-        user_ids
-            .iter()
-            .rev()
-            .find_map(|id| self.by_id.get(id))
-            .map(|message| message.nickname.clone())
+        user_ids.iter().rev().find_map(|id| self.by_id.get(id))
     }
 
     fn compute_anchored_person_start(&self) -> usize {
@@ -894,6 +964,46 @@ mod tests {
             .iter()
             .all(|message| message.read));
         assert_eq!(store.main_viewport_motion, None);
+    }
+
+    #[test]
+    fn person_header_keeps_latest_nickname_and_guard_identity_while_browsing_history() {
+        let mut store = MessageStore::new(1000, 50);
+        store.person_viewport_size = 2;
+        assert_eq!(store.snapshot().person_panel.selected_guard_type, None);
+        for index in 1..=5 {
+            let mut message = raw("历史消息", 42, index);
+            message.nickname = "旧昵称".to_string();
+            message.guard_type = 3;
+            store.ingest(message).unwrap();
+        }
+        store.select_user_anchor(1);
+        let mut latest = raw("新消息", 42, 6);
+        latest.nickname = "新昵称".to_string();
+        latest.guard_type = 2;
+        store.ingest(latest).unwrap();
+
+        assert!(!store
+            .snapshot()
+            .person_panel
+            .visible_messages
+            .iter()
+            .any(|message| message.message_id == 6));
+        for delta in [0, 99, -99] {
+            store.scroll_person_viewport(delta);
+            let panel = store.snapshot().person_panel;
+            assert_eq!(panel.selected_nickname.as_deref(), Some("新昵称"));
+            assert_eq!(panel.selected_guard_type, Some(2));
+        }
+
+        let mut other = raw("其他用户", 99, 7);
+        other.nickname = "另一位观众".to_string();
+        other.guard_type = 0;
+        store.ingest(other).unwrap();
+        store.select_user_anchor(7);
+        let panel = store.snapshot().person_panel;
+        assert_eq!(panel.selected_nickname.as_deref(), Some("另一位观众"));
+        assert_eq!(panel.selected_guard_type, Some(0));
     }
 
     #[test]

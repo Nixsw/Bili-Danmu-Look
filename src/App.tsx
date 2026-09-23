@@ -55,6 +55,7 @@ const initialSnapshot: AppSnapshot = {
   personPanel: {
     selectedUid: null,
     selectedNickname: null,
+    selectedGuardType: null,
     anchorMessageId: null,
     hoverFrozen: false,
     visibleMessages: [],
@@ -83,6 +84,8 @@ export default function App() {
   );
   const [connectApiSaveStatus, setConnectApiSaveStatus] = useState("");
   const [connectApiSubmitting, setConnectApiSubmitting] = useState(false);
+  const [clearingMessages, setClearingMessages] = useState(false);
+  const [clearMessagesStatus, setClearMessagesStatus] = useState("");
   const [statusNowMs, setStatusNowMs] = useState(() => Date.now());
   // A new status and its clock must render together, without borrowing the
   // previous retry's expired deadline for the first frame.
@@ -435,6 +438,27 @@ export default function App() {
     }
   };
 
+  const clearMessages = async (scope: "read" | "all") => {
+    if (clearingMessages) return;
+    setClearingMessages(true);
+    setClearMessagesStatus("正在清除消息");
+    setMessageContextMenu(null);
+    mainListMotion.cancel();
+    measureMainCapacity.reset();
+    measurePersonCapacity.reset();
+    try {
+      const count = scope === "read"
+        ? await client.clearReadMessages()
+        : await client.clearAllMessages();
+      setClearMessagesStatus(`已清除 ${count} 条${scope === "read" ? "已读" : ""}消息`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setClearMessagesStatus(`清除失败：${message}`);
+    } finally {
+      setClearingMessages(false);
+    }
+  };
+
   const onMainMessageClick = async (message: DanmuMessage) => {
     setMessageContextMenu(null);
     measurePersonCapacity.reset();
@@ -676,6 +700,29 @@ export default function App() {
             valueLabel={`${config.personHistoryCount} 条`}
             onChange={(value) => updateConfig({ personHistoryCount: value })}
           />
+          <div className="settings-clear-section">
+            <div className="settings-clear-actions">
+              <button
+                type="button"
+                className="clear-messages-button"
+                disabled={clearingMessages}
+                onClick={() => clearMessages("read")}
+              >
+                清除已读消息
+              </button>
+              <button
+                type="button"
+                className="clear-messages-button"
+                disabled={clearingMessages}
+                onClick={() => clearMessages("all")}
+              >
+                清除全部消息
+              </button>
+            </div>
+            {clearMessagesStatus && (
+              <p className="settings-status" role="status">{clearMessagesStatus}</p>
+            )}
+          </div>
         </section>
       )}
 
@@ -692,12 +739,17 @@ export default function App() {
           <div className="panel-header">
             <div>
               <span className="panel-kicker" title={snapshot.personPanel.selectedUid ?? undefined}>
-                {snapshot.personPanel.selectedUid
-                  ? `UID ${snapshot.personPanel.selectedUid}`
-                  : "UID"}
+                {snapshot.personPanel.selectedUid}
               </span>
-              <strong title={snapshot.personPanel.selectedNickname ?? undefined}>
-                {snapshot.personPanel.selectedNickname ?? "未选择"}
+              <strong
+                title={snapshot.personPanel.selectedNickname ?? undefined}
+                style={{
+                  color: snapshot.personPanel.selectedGuardType === null
+                    ? undefined
+                    : getGuardNicknameColor(snapshot.personPanel.selectedGuardType)
+                }}
+              >
+                {snapshot.personPanel.selectedNickname}
               </strong>
             </div>
           </div>
