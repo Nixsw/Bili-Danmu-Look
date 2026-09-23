@@ -323,6 +323,7 @@ export function createMessageStore(options: MessageStoreOptions) {
         connected,
         connectionStatus,
         mainVisible: api.getMainVisible(),
+        firstUnreadMessageId: firstUnread()?.messageId ?? null,
         mainHiddenNewerCount: getMainHiddenNewerCount(),
         mainViewportRevision,
         mainViewportMotion,

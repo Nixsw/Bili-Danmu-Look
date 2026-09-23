@@ -59,6 +59,7 @@ export interface AppSnapshot {
   connected: boolean;
   connectionStatus: string;
   mainVisible: DanmuMessage[];
+  firstUnreadMessageId: number | null;
   mainHiddenNewerCount: number;
   mainViewportRevision: number;
   mainViewportMotion: "advance" | "locate" | null;

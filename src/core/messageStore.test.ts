@@ -305,6 +305,34 @@ describe("main message viewport", () => {
     ]);
   });
 
+  it("exposes the global unread marker across scrolling, batch reads and cache trimming", () => {
+    const store = createMessageStore({
+      mainCapacity: 3,
+      mainViewportSize: 2,
+      personViewportSize: 5
+    });
+    expect(store.getSnapshot().firstUnreadMessageId).toBeNull();
+    store.ingest(baseRaw({ content: "A", uid: 1 }));
+    store.ingest(baseRaw({ content: "B", uid: 2 }));
+    store.ingest(baseRaw({ content: "C", uid: 1 }));
+    store.scrollMainViewport(1);
+    expect(store.getMainVisible().map((msg) => msg.messageId)).toEqual([2, 3]);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(1);
+    store.ackMainMessage(2);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(1);
+    store.ackUserMessages("1");
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(2);
+    store.ingest(baseRaw({ content: "D", uid: 3 }));
+    store.ingest(baseRaw({ content: "E", uid: 3 }));
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(4);
+    store.ackMessage(4);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(5);
+    store.ackMainMessage(5);
+    expect(store.getSnapshot().firstUnreadMessageId).toBeNull();
+    store.ingest(baseRaw({ content: "F", uid: 3 }));
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(6);
+  });
+
   it("rejects later right-side clicks even if the earliest unread is outside the viewport", () => {
     const store = createMessageStore({ mainViewportSize: 3, personViewportSize: 5 });
     "ABCDEFG".split("").forEach((content) => store.ingest(baseRaw({ content })));

@@ -41,7 +41,7 @@ import {
   shouldSuppressNativeContextMenu,
   type MessageContextMenuScope
 } from "./ui/contextMenu";
-import { createConnectApiUrlPatch } from "./ui/settingsPanel";
+import { createConnectApiUrlPatch, getMessageSizeLabel } from "./ui/settingsPanel";
 import { createMainListMotion } from "./ui/mainListMotion";
 import "./styles.css";
 
@@ -49,6 +49,7 @@ const initialSnapshot: AppSnapshot = {
   connected: false,
   connectionStatus: "启动中",
   mainVisible: [],
+  firstUnreadMessageId: null,
   mainHiddenNewerCount: 0,
   mainViewportRevision: 0,
   mainViewportMotion: null,
@@ -398,6 +399,7 @@ export default function App() {
   );
   const mainUnreadAnchorAction = getMainUnreadAnchorAction();
   const windowDismissAction = getWindowDismissAction();
+  const backgroundTransparency = Math.round((1 - config.opacity) * 100);
 
   const updateConfig = async (patch: Partial<DisplayConfig>) => {
     const next = await client.updateConfig(patch);
@@ -597,61 +599,54 @@ export default function App() {
 
       {settingsOpen && (
         <section className="settings-popover">
-          <label>
-            <span>连接接口</span>
-            <input
-              value={connectApiUrlDraft}
-              onChange={(event) => {
-                setConnectApiUrlDraft(event.target.value);
-                setConnectApiSaveStatus("");
-              }}
-            />
-          </label>
-          <div className="settings-actions">
-            <span>{connectApiSaveStatus}</span>
-            <button type="button" onClick={saveConnectApiUrl}>
-              保存接口
-            </button>
+          <div className="settings-connection">
+            <label htmlFor="connect-api-url">接口地址</label>
+            <div className="settings-connection-row">
+              <input
+                id="connect-api-url"
+                type="text"
+                spellCheck={false}
+                value={connectApiUrlDraft}
+                onChange={(event) => {
+                  setConnectApiUrlDraft(event.target.value);
+                  setConnectApiSaveStatus("");
+                }}
+              />
+              <button type="button" className="connect-button" onClick={saveConnectApiUrl}>
+                对接
+              </button>
+            </div>
+            {connectApiSaveStatus && (
+              <p className="settings-status" role="status">{connectApiSaveStatus}</p>
+            )}
           </div>
-          <label>
-            <span>透明度</span>
-            <input
-              type="range"
-              min="0.45"
-              max="0.98"
-              step="0.01"
-              value={config.opacity}
-              onChange={(event) =>
-                updateConfig({ opacity: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>字号</span>
-            <input
-              type="range"
-              min="12"
-              max="18"
-              step="1"
-              value={config.fontSize}
-              onChange={(event) =>
-                updateConfig({ fontSize: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>左侧历史条数 {config.personHistoryCount}</span>
-            <input
-              type="range"
-              min="0"
-              max="3"
-              step="1"
-              value={config.personHistoryCount}
-              onChange={(event) =>
-                updateConfig({ personHistoryCount: Number(event.target.value) })
-              }
-            />
-          </label>
+          <SettingsSlider
+            id="background-transparency"
+            label="背景透明度"
+            min={2}
+            max={55}
+            value={backgroundTransparency}
+            valueLabel={`${backgroundTransparency}%`}
+            onChange={(value) => updateConfig({ opacity: (100 - value) / 100 })}
+          />
+          <SettingsSlider
+            id="message-size"
+            label="消息显示大小"
+            min={12}
+            max={18}
+            value={config.fontSize}
+            valueLabel={`${getMessageSizeLabel(config.fontSize)} · ${config.fontSize}`}
+            onChange={(value) => updateConfig({ fontSize: value })}
+          />
+          <SettingsSlider
+            id="person-history-count"
+            label="左侧默认展示历史条数"
+            min={0}
+            max={3}
+            value={config.personHistoryCount}
+            valueLabel={`${config.personHistoryCount} 条`}
+            onChange={(value) => updateConfig({ personHistoryCount: value })}
+          />
         </section>
       )}
 
@@ -689,11 +684,20 @@ export default function App() {
                   message.messageType === "superChat" ? "is-super-chat" : ""
                 }`}
                 key={message.messageId}
+                data-message-id={message.messageId}
                 onClick={() => onPersonMessageClick(message)}
                 onContextMenu={(event) =>
                   openMessageContextMenu(event, message, "person")
                 }
               >
+                {snapshot.personPanel.anchorMessageId === message.messageId && (
+                  <span
+                    className="message-marker person-anchor-marker"
+                    role="img"
+                    aria-label="当前选中消息"
+                    title="当前选中消息"
+                  />
+                )}
                 <span className="time">{formatMmSs(message.timestampMs)}</span>
                 <span className="person-content">
                   {message.messageType === "superChat" && (
@@ -742,6 +746,14 @@ export default function App() {
                   onClick={() => onMainMessageClick(message)}
                   onContextMenu={(event) => openMessageContextMenu(event, message, "main")}
                 >
+                  {message.messageId === snapshot.firstUnreadMessageId && (
+                    <span
+                      className="message-marker first-unread-marker"
+                      role="img"
+                      aria-label="全局最早未读"
+                      title="全局最早未读"
+                    />
+                  )}
                   <span className="meta-line">
                     {message.messageType === "superChat" && (
                       <SuperChatBadge message={message} />
@@ -810,6 +822,41 @@ export default function App() {
         </div>
       )}
     </main>
+  );
+}
+
+function SettingsSlider({
+  id, label, min, max, value, valueLabel, onChange
+}: {
+  id: string;
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  valueLabel: string;
+  onChange: (value: number) => void;
+}) {
+  const progress = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+  return (
+    <label className="settings-slider" htmlFor={id}>
+      <span className="settings-slider-heading">
+        <span>{label}</span>
+        <output className="settings-value" htmlFor={id}>{valueLabel}</output>
+      </span>
+      <input
+        id={id}
+        className="settings-range"
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        aria-label={label}
+        aria-valuetext={valueLabel}
+        style={{ "--range-progress": `${progress}%` } as React.CSSProperties}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
   );
 }
 

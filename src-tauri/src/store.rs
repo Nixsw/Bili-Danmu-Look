@@ -231,6 +231,7 @@ impl MessageStore {
             connected: self.connected,
             connection_status: self.connection_status.clone(),
             main_visible: self.main_visible(),
+            first_unread_message_id: self.first_unread().map(|message| message.message_id),
             main_hidden_newer_count: self.main_hidden_newer_count(),
             main_viewport_revision: self.main_viewport_revision,
             main_viewport_motion: self.main_viewport_motion,
@@ -680,6 +681,35 @@ mod tests {
 
         store.set_viewport_sizes(Some(3), None);
         assert_eq!(main_contents(&store), ["H", "I", "J"]);
+    }
+
+    #[test]
+    fn snapshot_tracks_global_unread_across_scrolling_reads_and_trimming() {
+        let mut store = MessageStore::new(3, 50);
+        store.main_viewport_size = 2;
+        let empty = serde_json::to_value(store.snapshot()).unwrap();
+        assert_eq!(empty.get("firstUnreadMessageId"), Some(&serde_json::Value::Null));
+        store.ingest(raw("A", 1, 1)).unwrap();
+        store.ingest(raw("B", 2, 2)).unwrap();
+        store.ingest(raw("C", 1, 3)).unwrap();
+        store.scroll_main_viewport(1);
+        assert_eq!(main_contents(&store), ["B", "C"]);
+        assert_eq!(store.snapshot().first_unread_message_id, Some(1));
+        let snapshot = serde_json::to_value(store.snapshot()).unwrap();
+        assert_eq!(snapshot["firstUnreadMessageId"], 1);
+        store.ack_main_message(2);
+        assert_eq!(store.snapshot().first_unread_message_id, Some(1));
+        store.ack_user_messages("1");
+        assert_eq!(store.snapshot().first_unread_message_id, Some(2));
+        store.ingest(raw("D", 3, 4)).unwrap();
+        store.ingest(raw("E", 3, 5)).unwrap();
+        assert_eq!(store.snapshot().first_unread_message_id, Some(4));
+        store.ack_message(4);
+        assert_eq!(store.snapshot().first_unread_message_id, Some(5));
+        store.ack_main_message(5);
+        assert_eq!(store.snapshot().first_unread_message_id, None);
+        store.ingest(raw("F", 3, 6)).unwrap();
+        assert_eq!(store.snapshot().first_unread_message_id, Some(6));
     }
 
     #[test]

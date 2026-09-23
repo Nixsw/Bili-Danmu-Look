@@ -75,6 +75,7 @@ pub struct AppSnapshot {
     pub connected: bool,
     pub connection_status: String,
     pub main_visible: Vec<DanmuMessage>,
+    pub first_unread_message_id: Option<u64>,
     pub main_hidden_newer_count: usize,
     pub main_viewport_revision: u64,
     pub main_viewport_motion: Option<MainViewportMotion>,
