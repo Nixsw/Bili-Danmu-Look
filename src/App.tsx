@@ -39,7 +39,7 @@ import {
   shouldSuppressNativeContextMenu,
   type MessageContextMenuScope
 } from "./ui/contextMenu";
-import { createConnectApiUrlPatch, getMessageSizeLabel } from "./ui/settingsPanel";
+import { applyConnectApiUrl, getMessageSizeLabel } from "./ui/settingsPanel";
 import { createMainListMotion } from "./ui/mainListMotion";
 import "./styles.css";
 
@@ -82,11 +82,19 @@ export default function App() {
     "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect"
   );
   const [connectApiSaveStatus, setConnectApiSaveStatus] = useState("");
+  const [connectApiSubmitting, setConnectApiSubmitting] = useState(false);
   const [statusNowMs, setStatusNowMs] = useState(() => Date.now());
-  const [retryDeadlineMs, setRetryDeadlineMs] = useState<number | null>(null);
-  const [connectedToastDeadlineMs, setConnectedToastDeadlineMs] = useState<
-    number | null
-  >(null);
+  // A new status and its clock must render together, without borrowing the
+  // previous retry's expired deadline for the first frame.
+  const statusTiming = useMemo(() => {
+    const startedAtMs = Date.now();
+    return {
+      startedAtMs,
+      retryDeadlineMs: getRetryDeadlineMs(snapshot.connectionStatus, startedAtMs),
+      connectedToastDeadlineMs: getConnectedToastDeadlineMs(snapshot.connectionStatus, startedAtMs)
+    };
+  }, [snapshot.connectionStatus]);
+  const { retryDeadlineMs, connectedToastDeadlineMs } = statusTiming;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const contentGridRef = useRef<HTMLElement>(null);
   const mainListRef = useRef<HTMLDivElement>(null);
@@ -196,15 +204,6 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [messageContextMenu]);
-
-  useEffect(() => {
-    const nowMs = Date.now();
-    setStatusNowMs(nowMs);
-    setRetryDeadlineMs(getRetryDeadlineMs(snapshot.connectionStatus, nowMs));
-    setConnectedToastDeadlineMs(
-      getConnectedToastDeadlineMs(snapshot.connectionStatus, nowMs)
-    );
-  }, [snapshot.connectionStatus]);
 
   useEffect(() => {
     setConnectApiUrlDraft(config.connectApiUrl);
@@ -404,7 +403,7 @@ export default function App() {
     snapshot.connectionStatus,
     retryDeadlineMs,
     connectedToastDeadlineMs,
-    statusNowMs
+    Math.max(statusNowMs, statusTiming.startedAtMs)
   );
   const mainUnreadAnchorAction = getMainUnreadAnchorAction();
   const windowDismissAction = getWindowDismissAction();
@@ -418,15 +417,21 @@ export default function App() {
   };
 
   const saveConnectApiUrl = async () => {
-    setConnectApiSaveStatus("保存中");
+    if (connectApiSubmitting) return;
+    setConnectApiSubmitting(true);
+    setConnectApiSaveStatus("正在应用接口地址");
     try {
-      const next = await updateConfig(
-        createConnectApiUrlPatch(connectApiUrlDraft)
-      );
+      const next = await applyConnectApiUrl(connectApiUrlDraft, {
+        updateConfig,
+        reconnect: () => client.reconnect()
+      });
       setConnectApiUrlDraft(next.connectApiUrl);
-      setConnectApiSaveStatus("已保存");
+      setConnectApiSaveStatus("已保存，已发起对接");
     } catch (error) {
-      setConnectApiSaveStatus(`保存失败：${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      setConnectApiSaveStatus(`对接失败：${message}`);
+    } finally {
+      setConnectApiSubmitting(false);
     }
   };
 
@@ -580,6 +585,14 @@ export default function App() {
       >
         <div className="drag-title">
           <span>看弹幕工具</span>
+          <button
+            className="icon-button settings-button"
+            title="设置"
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen((value) => !value)}
+          >
+            <Settings size={15} />
+          </button>
           <span className="status-dot" data-state={snapshot.connected ? "on" : "off"} />
           {connectionStatusText ? (
             <span className="connection-status-text" title={snapshot.connectionStatus}>
@@ -596,13 +609,6 @@ export default function App() {
             onClick={onMainNewerTipClick}
           >
             <LocateFixed size={15} />
-          </button>
-          <button
-            className="icon-button"
-            title="设置"
-            onClick={() => setSettingsOpen((value) => !value)}
-          >
-            <Settings size={15} />
           </button>
           <button
             className="icon-button"
@@ -623,13 +629,19 @@ export default function App() {
                 id="connect-api-url"
                 type="text"
                 spellCheck={false}
+                disabled={connectApiSubmitting}
                 value={connectApiUrlDraft}
                 onChange={(event) => {
                   setConnectApiUrlDraft(event.target.value);
                   setConnectApiSaveStatus("");
                 }}
               />
-              <button type="button" className="connect-button" onClick={saveConnectApiUrl}>
+              <button
+                type="button"
+                className="connect-button"
+                disabled={connectApiSubmitting}
+                onClick={saveConnectApiUrl}
+              >
                 对接
               </button>
             </div>
