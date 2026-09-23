@@ -76,7 +76,16 @@ pub struct AppSnapshot {
     pub connection_status: String,
     pub main_visible: Vec<DanmuMessage>,
     pub main_hidden_newer_count: usize,
+    pub main_viewport_revision: u64,
+    pub main_viewport_motion: Option<MainViewportMotion>,
     pub person_panel: PersonPanelSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MainViewportMotion {
+    Advance,
+    Locate,
 }
 
 pub fn normalize_incoming(raw: IncomingDanmuRaw, message_id: u64) -> Result<DanmuMessage, String> {

@@ -7,10 +7,10 @@ mod ws_client;
 
 use app_config::{load_config, save_window_position, save_window_size};
 use commands::{
-    ack_message, ack_user_messages, connect_ws, disconnect_ws, get_config, get_snapshot,
-    jump_main_viewport_to_unread, probe_bilibili_connection, reconnect_ws, scroll_main_viewport,
-    scroll_person_viewport, select_user_anchor, set_person_panel_hover, set_viewport_sizes,
-    update_config,
+    ack_main_message, ack_message, ack_user_messages, connect_ws, disconnect_ws, get_config,
+    get_snapshot, jump_main_viewport_to_unread, probe_bilibili_connection, reconnect_ws,
+    scroll_main_viewport, scroll_person_viewport, select_user_anchor,
+    set_person_panel_hover, set_viewport_sizes, update_config,
 };
 use std::sync::{Arc, Mutex};
 use store::MessageStore;
@@ -62,6 +62,7 @@ pub fn run() {
             reconnect_ws,
             probe_bilibili_connection,
             ack_message,
+            ack_main_message,
             ack_user_messages,
             select_user_anchor,
             set_person_panel_hover,
@@ -89,6 +90,7 @@ fn ensure_main_window(app: &tauri::App) -> tauri::Result<()> {
         .visible(false)
         .always_on_top(true)
         .resizable(true)
+        .maximizable(false)
         .build()?;
     Ok(())
 }

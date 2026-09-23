@@ -1,5 +1,6 @@
 use crate::models::{
-    normalize_incoming, AppSnapshot, DanmuMessage, IncomingDanmuRaw, PersonPanelSnapshot,
+    normalize_incoming, AppSnapshot, DanmuMessage, IncomingDanmuRaw, MainViewportMotion,
+    PersonPanelSnapshot,
 };
 use std::collections::{HashMap, VecDeque};
 
@@ -11,6 +12,9 @@ pub struct MessageStore {
     person_viewport_size: usize,
     person_history_count: usize,
     main_start_index: usize,
+    main_top_aligned: bool,
+    main_viewport_revision: u64,
+    main_viewport_motion: Option<MainViewportMotion>,
     selected_uid: Option<String>,
     anchor_message_id: Option<u64>,
     person_start_index: usize,
@@ -33,6 +37,9 @@ impl MessageStore {
             person_viewport_size: 14,
             person_history_count: 1,
             main_start_index: 0,
+            main_top_aligned: false,
+            main_viewport_revision: 0,
+            main_viewport_motion: None,
             selected_uid: None,
             anchor_message_id: None,
             person_start_index: 0,
@@ -68,7 +75,22 @@ impl MessageStore {
         Ok(message)
     }
 
+    pub fn ack_main_message(&mut self, message_id: u64) {
+        if self.first_unread().map(|message| message.message_id) == Some(message_id) {
+            self.ack_message(message_id);
+        }
+    }
+
     pub fn ack_message(&mut self, message_id: u64) {
+        if self
+            .by_id
+            .get(&message_id)
+            .map_or(true, |message| message.read)
+        {
+            return;
+        }
+        let advances_unread =
+            self.first_unread().map(|message| message.message_id) == Some(message_id);
         if let Some(message) = self.by_id.get_mut(&message_id) {
             message.read = true;
         }
@@ -79,18 +101,13 @@ impl MessageStore {
             }
         }
 
-        while self
-            .messages
-            .get(self.main_start_index)
-            .map(|message| message.read)
-            .unwrap_or(false)
-        {
-            self.main_start_index += 1;
+        if advances_unread {
+            self.align_main_to_unread(MainViewportMotion::Advance);
         }
-        self.clamp_main_viewport_start();
     }
 
     pub fn ack_user_messages(&mut self, uid: &str) {
+        let advances_unread = self.first_unread().map(|message| message.uid.as_str()) == Some(uid);
         if let Some(user_ids) = self.ids_by_uid.get(uid) {
             for message_id in user_ids {
                 if let Some(message) = self.by_id.get_mut(message_id) {
@@ -105,15 +122,9 @@ impl MessageStore {
             }
         }
 
-        while self
-            .messages
-            .get(self.main_start_index)
-            .map(|message| message.read)
-            .unwrap_or(false)
-        {
-            self.main_start_index += 1;
+        if advances_unread {
+            self.align_main_to_unread(MainViewportMotion::Advance);
         }
-        self.clamp_main_viewport_start();
     }
 
     pub fn select_user_anchor(&mut self, message_id: u64) {
@@ -135,24 +146,29 @@ impl MessageStore {
     }
 
     pub fn scroll_main_viewport(&mut self, delta: isize) {
-        self.main_start_index = scroll_viewport_start(
-            self.main_start_index,
-            delta,
-            self.messages.len(),
-            self.main_viewport_size,
-        );
+        if delta == 0 {
+            return;
+        }
+        let normal_max = max_viewport_start(self.messages.len(), self.main_viewport_size);
+        // Keep wheel steps continuous when leaving a short, top-aligned tail.
+        let max_start = if self.main_top_aligned {
+            normal_max.max(self.main_start_index)
+        } else {
+            normal_max
+        };
+        self.main_start_index = if delta >= 0 {
+            self.main_start_index.saturating_add(delta as usize)
+        } else {
+            self.main_start_index.saturating_sub(delta.unsigned_abs())
+        }
+        .min(max_start);
+        self.main_top_aligned = self.main_start_index > normal_max;
+        self.main_viewport_revision += 1;
+        self.main_viewport_motion = None;
     }
 
     pub fn jump_main_viewport_to_unread(&mut self) {
-        let max_start = max_viewport_start(self.messages.len(), self.main_viewport_size);
-        let first_unread_index = self
-            .messages
-            .iter()
-            .enumerate()
-            .skip(self.main_start_index)
-            .find_map(|(index, message)| (!message.read).then_some(index));
-
-        self.main_start_index = first_unread_index.unwrap_or(max_start).min(max_start);
+        self.align_main_to_unread(MainViewportMotion::Locate);
     }
 
     pub fn scroll_person_viewport(&mut self, delta: isize) {
@@ -216,6 +232,8 @@ impl MessageStore {
             connection_status: self.connection_status.clone(),
             main_visible: self.main_visible(),
             main_hidden_newer_count: self.main_hidden_newer_count(),
+            main_viewport_revision: self.main_viewport_revision,
+            main_viewport_motion: self.main_viewport_motion,
             person_panel: self.person_panel(),
         }
     }
@@ -322,7 +340,8 @@ impl MessageStore {
     }
 
     fn is_main_viewport_at_bottom(&self) -> bool {
-        self.messages.len() > self.main_viewport_size
+        !self.main_top_aligned
+            && self.messages.len() > self.main_viewport_size
             && self.main_start_index
                 >= max_viewport_start(self.messages.len(), self.main_viewport_size)
     }
@@ -332,11 +351,30 @@ impl MessageStore {
     }
 
     fn clamp_main_viewport_start(&mut self) {
-        self.main_start_index = clamp_viewport_start(
-            self.main_start_index,
-            self.messages.len(),
-            self.main_viewport_size,
-        );
+        let max_start = if self.main_top_aligned {
+            self.messages.len().saturating_sub(1)
+        } else {
+            max_viewport_start(self.messages.len(), self.main_viewport_size)
+        };
+        self.main_start_index = self.main_start_index.min(max_start);
+    }
+
+    fn first_unread(&self) -> Option<&DanmuMessage> {
+        self.messages.iter().find(|message| !message.read)
+    }
+
+    fn align_main_to_unread(&mut self, motion: MainViewportMotion) {
+        let index = self.messages.iter().position(|message| !message.read);
+        let previous_start = self.main_start_index;
+        self.main_top_aligned = index.is_some();
+        self.main_start_index = index
+            .unwrap_or_else(|| max_viewport_start(self.messages.len(), self.main_viewport_size));
+        self.main_viewport_revision += 1;
+        self.main_viewport_motion = if index.is_some() && previous_start != self.main_start_index {
+            Some(motion)
+        } else {
+            None
+        };
     }
 
     fn main_hidden_newer_count(&self) -> usize {
@@ -485,12 +523,12 @@ mod tests {
                 .iter()
                 .map(|message| format!("{}:{}", message.content, message.read))
                 .collect::<Vec<_>>(),
-            ["A:true", "B:false", "C:true", "D:true", "E:false"]
+            ["B:false", "C:true", "D:true", "E:false"]
         );
     }
 
     #[test]
-    fn main_viewport_stays_full_when_acknowledgements_advance_near_the_end() {
+    fn main_viewport_puts_next_unread_first_near_the_end() {
         let mut store = MessageStore::new(1000, 50);
         store.main_viewport_size = 5;
         for content in ["A", "B", "C", "D", "E", "F", "G"] {
@@ -501,7 +539,7 @@ mod tests {
         store.ack_message(2);
         store.ack_message(3);
 
-        assert_eq!(main_contents(&store), ["C", "D", "E", "F", "G"]);
+        assert_eq!(main_contents(&store), ["D", "E", "F", "G"]);
     }
 
     #[test]
@@ -570,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn main_viewport_stays_full_when_jumping_to_unread_near_the_end() {
+    fn main_viewport_puts_unread_first_near_the_end() {
         let mut store = MessageStore::new(1000, 50);
         store.main_viewport_size = 5;
         for content in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"] {
@@ -580,7 +618,7 @@ mod tests {
         for message_id in 1..=7 {
             store.ack_message(message_id);
         }
-        store.scroll_main_viewport(-3);
+        store.scroll_main_viewport(-5);
         assert_eq!(
             store
                 .snapshot()
@@ -593,7 +631,7 @@ mod tests {
 
         store.jump_main_viewport_to_unread();
 
-        assert_eq!(main_contents(&store), ["F", "G", "H", "I", "J"]);
+        assert_eq!(main_contents(&store), ["H", "I", "J"]);
     }
 
     #[test]
@@ -642,6 +680,130 @@ mod tests {
 
         store.set_viewport_sizes(Some(3), None);
         assert_eq!(main_contents(&store), ["H", "I", "J"]);
+    }
+
+    #[test]
+    fn main_clicks_require_global_first_unread_even_outside_viewport() {
+        let mut store = MessageStore::new(1000, 50);
+        store.main_viewport_size = 3;
+        for content in ["A", "B", "C", "D", "E", "F", "G"] {
+            store.ingest(raw(content, 1, 1)).unwrap();
+        }
+        store.scroll_main_viewport(3);
+        store.select_user_anchor(4);
+        store.ack_main_message(4);
+        assert!(!store.snapshot().main_visible[0].read);
+        assert_eq!(store.snapshot().person_panel.anchor_message_id, Some(4));
+        store.jump_main_viewport_to_unread();
+        assert_eq!(store.snapshot().main_visible[0].message_id, 1);
+        store.ack_main_message(3);
+        store.ack_main_message(1);
+        assert_eq!(main_contents(&store), ["B", "C", "D"]);
+        assert!(store
+            .snapshot()
+            .main_visible
+            .iter()
+            .all(|message| !message.read));
+    }
+
+    #[test]
+    fn person_reads_can_skip_ahead_and_main_advance_skips_read_messages() {
+        let mut store = MessageStore::new(1000, 50);
+        store.main_viewport_size = 5;
+        for content in ["A", "B", "C", "D", "E"] {
+            store.ingest(raw(content, 1, 1)).unwrap();
+        }
+        store.ack_message(2);
+        store.ack_message(3);
+        assert_eq!(store.main_viewport_revision, 0);
+        assert_eq!(store.snapshot().main_visible[0].message_id, 1);
+        store.ack_main_message(1);
+        assert_eq!(main_contents(&store), ["D", "E"]);
+        assert_eq!(
+            store.main_viewport_motion,
+            Some(MainViewportMotion::Advance)
+        );
+    }
+
+    #[test]
+    fn unread_top_survives_ingest_resize_and_cache_trimming() {
+        let mut store = MessageStore::new(6, 50);
+        store.main_viewport_size = 5;
+        for content in ["A", "B", "C", "D", "E", "F"] {
+            store.ingest(raw(content, 1, 1)).unwrap();
+        }
+        for id in 1..=5 {
+            store.ack_main_message(id);
+        }
+        let revision = store.main_viewport_revision;
+        store.set_viewport_sizes(Some(3), None);
+        store.ingest(raw("G", 1, 1)).unwrap();
+        store.set_viewport_sizes(Some(8), None);
+        assert_eq!(main_contents(&store), ["F", "G"]);
+        assert_eq!(store.main_viewport_revision, revision);
+        assert_eq!(store.snapshot().main_hidden_newer_count, 0);
+    }
+
+    #[test]
+    fn locate_finds_global_unread_in_both_directions_without_reading() {
+        let mut store = MessageStore::new(1000, 50);
+        store.main_viewport_size = 3;
+        for content in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+            store.ingest(raw(content, 1, 1)).unwrap();
+        }
+        store.ack_main_message(1);
+        store.scroll_main_viewport(99);
+        store.jump_main_viewport_to_unread();
+        assert_eq!(store.snapshot().main_visible[0].message_id, 2);
+        assert!(!store.snapshot().main_visible[0].read);
+        assert_eq!(store.main_viewport_motion, Some(MainViewportMotion::Locate));
+        store.scroll_main_viewport(-1);
+        store.jump_main_viewport_to_unread();
+        assert_eq!(store.snapshot().main_visible[0].message_id, 2);
+        assert!(!store.snapshot().main_visible[0].read);
+    }
+
+    #[test]
+    fn wheel_steps_stay_continuous_from_a_short_top_aligned_tail() {
+        let mut store = MessageStore::new(1000, 50);
+        store.main_viewport_size = 5;
+        for content in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+            store.ingest(raw(content, 1, 1)).unwrap();
+        }
+        for id in 1..=6 {
+            store.ack_main_message(id);
+        }
+        store.scroll_main_viewport(1);
+        assert_eq!(store.snapshot().main_visible[0].message_id, 7);
+        store.scroll_main_viewport(-1);
+        assert_eq!(store.snapshot().main_visible[0].message_id, 6);
+        store.scroll_main_viewport(-1);
+        assert_eq!(store.snapshot().main_visible[0].message_id, 5);
+        assert_eq!(store.main_viewport_motion, None);
+        store.jump_main_viewport_to_unread();
+        assert_eq!(store.snapshot().main_visible[0].message_id, 7);
+    }
+
+    #[test]
+    fn stale_clicks_are_idempotent_and_last_unread_does_not_animate() {
+        let mut store = MessageStore::new(1000, 50);
+        store.jump_main_viewport_to_unread();
+        assert_eq!(store.main_viewport_motion, None);
+        store.ingest(raw("A", 1, 1)).unwrap();
+        store.ingest(raw("B", 1, 1)).unwrap();
+        store.ack_main_message(1);
+        let revision = store.main_viewport_revision;
+        store.ack_main_message(1);
+        store.ack_message(1);
+        store.ack_message(999);
+        assert_eq!(store.main_viewport_revision, revision);
+        store.ack_main_message(2);
+        assert!(store
+            .snapshot()
+            .main_visible
+            .iter()
+            .all(|message| message.read));
+        assert_eq!(store.main_viewport_motion, None);
     }
 
     #[test]

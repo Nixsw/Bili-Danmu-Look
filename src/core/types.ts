@@ -60,5 +60,7 @@ export interface AppSnapshot {
   connectionStatus: string;
   mainVisible: DanmuMessage[];
   mainHiddenNewerCount: number;
+  mainViewportRevision: number;
+  mainViewportMotion: "advance" | "locate" | null;
   personPanel: PersonPanelSnapshot;
 }

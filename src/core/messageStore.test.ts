@@ -139,7 +139,6 @@ describe("main message viewport", () => {
     store.ackUserMessages("1");
 
     expect(store.getMainVisible().map((msg) => `${msg.content}:${msg.read}`)).toEqual([
-      "A:true",
       "B:false",
       "C:true",
       "D:true",
@@ -174,7 +173,7 @@ describe("main message viewport", () => {
     ]);
   });
 
-  it("keeps the main viewport full when acknowledgements advance near the end", () => {
+  it("puts the next unread first even when fewer than a full page remain", () => {
     const store = createMessageStore({ mainViewportSize: 5, personViewportSize: 5 });
     "ABCDEFG".split("").forEach((content, index) => {
       store.ingest(baseRaw({ content, uid: 1, timestampMs: 1_000 + index }));
@@ -185,7 +184,6 @@ describe("main message viewport", () => {
     store.ackMessage(3);
 
     expect(store.getMainVisible().map((msg) => msg.content)).toEqual([
-      "C",
       "D",
       "E",
       "F",
@@ -280,7 +278,7 @@ describe("main message viewport", () => {
     ]);
   });
 
-  it("keeps the main viewport full when jumping to an unread message near the end", () => {
+  it("puts the unread target first near the end and leaves space below", () => {
     const store = createMessageStore({ mainViewportSize: 5, personViewportSize: 5 });
     "ABCDEFGHIJ".split("").forEach((content, index) => {
       store.ingest(baseRaw({ content, uid: 1, timestampMs: 1_000 + index }));
@@ -289,7 +287,7 @@ describe("main message viewport", () => {
     for (let messageId = 1; messageId <= 7; messageId += 1) {
       store.ackMessage(messageId);
     }
-    store.scrollMainViewport(-3);
+    store.scrollMainViewport(-5);
     expect(store.getMainVisible().map((msg) => `${msg.content}:${msg.read}`)).toEqual([
       "C:true",
       "D:true",
@@ -301,12 +299,97 @@ describe("main message viewport", () => {
     store.jumpMainViewportToUnread();
 
     expect(store.getMainVisible().map((msg) => msg.content)).toEqual([
-      "F",
-      "G",
       "H",
       "I",
       "J"
     ]);
+  });
+
+  it("rejects later right-side clicks even if the earliest unread is outside the viewport", () => {
+    const store = createMessageStore({ mainViewportSize: 3, personViewportSize: 5 });
+    "ABCDEFG".split("").forEach((content) => store.ingest(baseRaw({ content })));
+    store.scrollMainViewport(3);
+    store.selectUserAnchor(4);
+    store.ackMainMessage(4);
+    expect(store.getMainVisible()[0].read).toBe(false);
+    expect(store.getPersonPanel().anchorMessageId).toBe(4);
+    store.jumpMainViewportToUnread();
+    expect(store.getMainVisible()[0].messageId).toBe(1);
+    store.ackMainMessage(3);
+    store.ackMainMessage(1);
+    expect(store.getMainVisible().map((msg) => [msg.messageId, msg.read])).toEqual([
+      [2, false], [3, false], [4, false]
+    ]);
+  });
+
+  it("allows person reads out of order, then advances past them when the first unread is read", () => {
+    const store = createMessageStore({ mainViewportSize: 5, personViewportSize: 5 });
+    "ABCDE".split("").forEach((content) => store.ingest(baseRaw({ content })));
+    store.ackMessage(2);
+    store.ackMessage(3);
+    expect(store.getMainVisible()[0].messageId).toBe(1);
+    expect(store.getSnapshot().mainViewportRevision).toBe(0);
+    store.ackMainMessage(1);
+    expect(store.getMainVisible().map((msg) => msg.messageId)).toEqual([4, 5]);
+    expect(store.getSnapshot().mainViewportMotion).toBe("advance");
+  });
+
+  it("keeps a located unread at the top through new messages, capacity changes and trimming", () => {
+    const store = createMessageStore({ mainViewportSize: 5, personViewportSize: 5, mainCapacity: 6 });
+    "ABCDEF".split("").forEach((content) => store.ingest(baseRaw({ content })));
+    [1, 2, 3, 4, 5].forEach((id) => store.ackMainMessage(id));
+    const revision = store.getSnapshot().mainViewportRevision;
+    store.setViewportSizes({ mainViewportSize: 3 });
+    store.ingest(baseRaw({ content: "G" }));
+    store.setViewportSizes({ mainViewportSize: 8 });
+    expect(store.getMainVisible().map((msg) => msg.content)).toEqual(["F", "G"]);
+    expect(store.getSnapshot().mainViewportRevision).toBe(revision);
+    expect(store.getSnapshot().mainHiddenNewerCount).toBe(0);
+  });
+
+  it("locates the global unread in either direction without changing its read state", () => {
+    const store = createMessageStore({ mainViewportSize: 3, personViewportSize: 5 });
+    "ABCDEFGH".split("").forEach((content) => store.ingest(baseRaw({ content })));
+    store.ackMainMessage(1);
+    store.scrollMainViewport(99);
+    store.jumpMainViewportToUnread();
+    expect(store.getMainVisible()[0]).toMatchObject({ messageId: 2, read: false });
+    expect(store.getSnapshot().mainViewportMotion).toBe("locate");
+    store.scrollMainViewport(-1);
+    store.jumpMainViewportToUnread();
+    expect(store.getMainVisible()[0]).toMatchObject({ messageId: 2, read: false });
+  });
+
+  it("keeps wheel steps continuous when leaving the top-aligned tail", () => {
+    const store = createMessageStore({ mainViewportSize: 5, personViewportSize: 5 });
+    "ABCDEFGH".split("").forEach((content) => store.ingest(baseRaw({ content })));
+    [1, 2, 3, 4, 5, 6].forEach((id) => store.ackMainMessage(id));
+    store.scrollMainViewport(1);
+    expect(store.getMainVisible()[0].messageId).toBe(7);
+    store.scrollMainViewport(-1);
+    expect(store.getMainVisible()[0].messageId).toBe(6);
+    store.scrollMainViewport(-1);
+    expect(store.getMainVisible()[0].messageId).toBe(5);
+    expect(store.getSnapshot().mainViewportMotion).toBeNull();
+    store.jumpMainViewportToUnread();
+    expect(store.getMainVisible()[0].messageId).toBe(7);
+  });
+
+  it("ignores stale and missing clicks and does not animate after the last unread", () => {
+    const store = createMessageStore({ mainViewportSize: 5, personViewportSize: 5 });
+    store.jumpMainViewportToUnread();
+    expect(store.getSnapshot().mainViewportMotion).toBeNull();
+    store.ingest(baseRaw({ content: "A" }));
+    store.ingest(baseRaw({ content: "B" }));
+    store.ackMainMessage(1);
+    const revision = store.getSnapshot().mainViewportRevision;
+    store.ackMainMessage(1);
+    store.ackMessage(1);
+    store.ackMessage(999);
+    expect(store.getSnapshot().mainViewportRevision).toBe(revision);
+    store.ackMainMessage(2);
+    expect(store.getMainVisible().every((msg) => msg.read)).toBe(true);
+    expect(store.getSnapshot().mainViewportMotion).toBeNull();
   });
 
   it("jumps the main viewport to the newest page when no unread message remains", () => {

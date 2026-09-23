@@ -4,6 +4,7 @@ dist-ssr/
 src-tauri/target/
 src-tauri/gen/
 test-output/
+output/playwright/
 .superpowers/
 *.log
 *.local

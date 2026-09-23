@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   LocateFixed,
@@ -42,6 +42,7 @@ import {
   type MessageContextMenuScope
 } from "./ui/contextMenu";
 import { createConnectApiUrlPatch } from "./ui/settingsPanel";
+import { createMainListMotion } from "./ui/mainListMotion";
 import "./styles.css";
 
 const initialSnapshot: AppSnapshot = {
@@ -49,6 +50,8 @@ const initialSnapshot: AppSnapshot = {
   connectionStatus: "启动中",
   mainVisible: [],
   mainHiddenNewerCount: 0,
+  mainViewportRevision: 0,
+  mainViewportMotion: null,
   personPanel: {
     selectedUid: null,
     selectedNickname: null,
@@ -87,6 +90,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const contentGridRef = useRef<HTMLElement>(null);
   const mainListRef = useRef<HTMLDivElement>(null);
+  const mainListMotion = useMemo(() => createMainListMotion(() => mainListRef.current), []);
   const personListRef = useRef<HTMLDivElement>(null);
   const lastMainViewportSizeRef = useRef<number | null>(null);
   const lastPersonViewportSizeRef = useRef<number | null>(null);
@@ -128,7 +132,9 @@ export default function App() {
     let disposeTrayDisconnect: (() => void) | undefined;
     let disposeTraySettings: (() => void) | undefined;
     client.getConfig().then(setConfig).catch(() => undefined);
-    client.init(setSnapshot).then((unlisten) => {
+    client.init((next) => {
+      if (mainListMotion.prepare(next)) setSnapshot(next);
+    }).then((unlisten) => {
       dispose = unlisten;
       void client.connect().catch(() => undefined);
     });
@@ -149,7 +155,22 @@ export default function App() {
       disposeTrayDisconnect?.();
       disposeTraySettings?.();
     };
-  }, [client]);
+  }, [client, mainListMotion]);
+
+  useLayoutEffect(() => {
+    mainListMotion.play();
+  }, [snapshot, mainListMotion]);
+
+  useEffect(() => {
+    const cancel = () => mainListMotion.cancel();
+    window.addEventListener("resize", cancel);
+    document.addEventListener("visibilitychange", cancel);
+    return () => {
+      cancel();
+      window.removeEventListener("resize", cancel);
+      document.removeEventListener("visibilitychange", cancel);
+    };
+  }, [mainListMotion]);
 
   useEffect(() => {
     if (!messageContextMenu) {
@@ -400,7 +421,7 @@ export default function App() {
   const onMainMessageClick = async (message: DanmuMessage) => {
     setMessageContextMenu(null);
     await client.selectUserAnchor(message.messageId);
-    await client.ackMessage(message.messageId);
+    await client.ackMainMessage(message.messageId);
   };
 
   const onPersonMessageClick = async (message: DanmuMessage) => {
@@ -437,11 +458,12 @@ export default function App() {
     if (event.deltaY === 0) {
       return 0;
     }
-    event.preventDefault();
+    // The viewport is clipped; React's passive wheel listener cannot cancel scrolling.
     return event.deltaY > 0 ? 1 : -1;
   };
 
   const onMainWheel = (event: React.WheelEvent<HTMLElement>) => {
+    mainListMotion.cancel();
     const delta = wheelToViewportDelta(event);
     if (delta !== 0) {
       void client.scrollMainViewport(delta);
@@ -501,6 +523,7 @@ export default function App() {
     }
 
     event.preventDefault();
+    mainListMotion.cancel();
     setSplitDragging(true);
     updateManualSplit(event.clientX);
 
@@ -704,38 +727,41 @@ export default function App() {
         )}
 
         <section className="main-panel" onWheel={onMainWheel}>
-          <div
-            className={`message-list ${mainListFilled ? "is-filled" : ""}`}
-            ref={mainListRef}
-          >
-            {snapshot.mainVisible.map((message) => (
-              <button
-                key={message.messageId}
-                className={`message-card ${message.read ? "is-read" : ""} ${
-                  message.messageType === "superChat" ? "is-super-chat" : ""
-                }`}
-                onClick={() => onMainMessageClick(message)}
-                onContextMenu={(event) => openMessageContextMenu(event, message, "main")}
-              >
-                <span className="meta-line">
-                  {message.messageType === "superChat" && (
-                    <SuperChatBadge message={message} />
-                  )}
-                  <WealthMedal level={message.userLevel} />
-                  <FanMedal message={message} />
-                  <strong
-                    className="nickname"
-                    style={{ color: getGuardNicknameColor(message.guardType) }}
-                  >
-                    {message.nickname}
-                  </strong>
-                  <span className="message-time">
-                    {formatHhMmSs(message.timestampMs)}
+          <div className="main-list-viewport">
+            <div
+              className={`message-list ${mainListFilled ? "is-filled" : ""}`}
+              ref={mainListRef}
+            >
+              {snapshot.mainVisible.map((message) => (
+                <button
+                  key={message.messageId}
+                  data-message-id={message.messageId}
+                  className={`message-card ${message.read ? "is-read" : ""} ${
+                    message.messageType === "superChat" ? "is-super-chat" : ""
+                  }`}
+                  onClick={() => onMainMessageClick(message)}
+                  onContextMenu={(event) => openMessageContextMenu(event, message, "main")}
+                >
+                  <span className="meta-line">
+                    {message.messageType === "superChat" && (
+                      <SuperChatBadge message={message} />
+                    )}
+                    <WealthMedal level={message.userLevel} />
+                    <FanMedal message={message} />
+                    <strong
+                      className="nickname"
+                      style={{ color: getGuardNicknameColor(message.guardType) }}
+                    >
+                      {message.nickname}
+                    </strong>
+                    <span className="message-time">
+                      {formatHhMmSs(message.timestampMs)}
+                    </span>
                   </span>
-                </span>
-                <span className="content-line">{message.content}</span>
-              </button>
-            ))}
+                  <span className="content-line">{message.content}</span>
+                </button>
+              ))}
+            </div>
           </div>
           <div
             className="newer-tip main-newer-tip"

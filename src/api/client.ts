@@ -35,6 +35,7 @@ export interface DanmuClient {
   disconnect(): Promise<void>;
   reconnect(): Promise<void>;
   ackMessage(messageId: number): Promise<void>;
+  ackMainMessage(messageId: number): Promise<void>;
   ackUserMessages(uid: string): Promise<void>;
   selectUserAnchor(messageId: number): Promise<void>;
   setPersonPanelHover(value: boolean): Promise<void>;
@@ -96,6 +97,7 @@ function createTauriClient(): DanmuClient {
     disconnect: () => invoke<void>("disconnect_ws"),
     reconnect: () => invoke<void>("reconnect_ws"),
     ackMessage: (messageId) => invoke<void>("ack_message", { messageId }),
+    ackMainMessage: (messageId) => invoke<void>("ack_main_message", { messageId }),
     ackUserMessages: (uid) => invoke<void>("ack_user_messages", { uid }),
     selectUserAnchor: (messageId) =>
       invoke<void>("select_user_anchor", { messageId }),
@@ -202,6 +204,10 @@ function createBrowserFallbackClient(): DanmuClient {
     },
     async ackMessage(messageId) {
       store.ackMessage(messageId);
+      emit();
+    },
+    async ackMainMessage(messageId) {
+      store.ackMainMessage(messageId);
       emit();
     },
     async ackUserMessages(uid) {
