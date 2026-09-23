@@ -32,10 +32,8 @@ import {
   getConnectedToastDeadlineMs,
   getRetryDeadlineMs
 } from "./ui/connectionStatus";
-import {
-  estimateViewportCapacity,
-  shouldDistributeViewportSlack
-} from "./ui/viewportCapacity";
+import { createViewportCapacityTracker } from "./ui/viewportCapacity";
+import { scrollMessageContent } from "./ui/messageScroll";
 import {
   getMessageContextMenuLabels,
   shouldSuppressNativeContextMenu,
@@ -51,6 +49,7 @@ const initialSnapshot: AppSnapshot = {
   mainVisible: [],
   firstUnreadMessageId: null,
   mainHiddenNewerCount: 0,
+  mainCacheNearFull: false,
   mainViewportRevision: 0,
   mainViewportMotion: null,
   personPanel: {
@@ -95,6 +94,8 @@ export default function App() {
   const personListRef = useRef<HTMLDivElement>(null);
   const lastMainViewportSizeRef = useRef<number | null>(null);
   const lastPersonViewportSizeRef = useRef<number | null>(null);
+  const measureMainCapacity = useMemo(createViewportCapacityTracker, []);
+  const measurePersonCapacity = useMemo(createViewportCapacityTracker, []);
   const [contentWidth, setContentWidth] = useState(
     MAIN_READABLE_WIDTH + PERSON_PANEL_DEFAULT_WIDTH
   );
@@ -276,6 +277,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const element = contentGridRef.current;
+    if (!element) return;
+    element.addEventListener("wheel", scrollMessageContent, { capture: true, passive: false });
+    return () => element.removeEventListener("wheel", scrollMessageContent, true);
+  }, []);
+
+  useEffect(() => {
     const list = mainListRef.current;
     if (!list) {
       return;
@@ -293,8 +301,12 @@ export default function App() {
         }
 
         const style = window.getComputedStyle(list);
-        const capacity = estimateViewportCapacity({
+        const capacity = measureMainCapacity({
+          containerWidth: list.clientWidth,
           containerHeight: list.clientHeight,
+          fontSize: config.fontSize,
+          minRowHeight: cssNumber(window.getComputedStyle(rows[0]).minHeight),
+          rowIds: rows.map((row) => row.dataset.messageId!),
           rowHeights: rows.map((row) => row.getBoundingClientRect().height),
           gap: cssNumber(style.rowGap),
           paddingTop: cssNumber(style.paddingTop),
@@ -319,7 +331,7 @@ export default function App() {
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [client, config.fontSize, mainMeasurementKey]);
+  }, [client, config.fontSize, mainMeasurementKey, measureMainCapacity]);
 
   useEffect(() => {
     if (!personVisible) {
@@ -343,8 +355,12 @@ export default function App() {
         }
 
         const style = window.getComputedStyle(list);
-        const capacity = estimateViewportCapacity({
+        const capacity = measurePersonCapacity({
+          containerWidth: list.clientWidth,
           containerHeight: list.clientHeight,
+          fontSize: config.fontSize,
+          minRowHeight: cssNumber(window.getComputedStyle(rows[0]).minHeight),
+          rowIds: rows.map((row) => row.dataset.messageId!),
           rowHeights: rows.map((row) => row.getBoundingClientRect().height),
           gap: cssNumber(style.rowGap),
           paddingTop: cssNumber(style.paddingTop),
@@ -372,6 +388,7 @@ export default function App() {
   }, [
     client,
     config.fontSize,
+    measurePersonCapacity,
     personVisible,
     snapshot.personPanel.hiddenNewerCount,
     personMeasurementKey
@@ -383,14 +400,6 @@ export default function App() {
     "--person-panel-width": `${splitLayout.personWidth}px`,
     "--main-panel-width": `${splitLayout.mainWidth}px`
   } as React.CSSProperties;
-  const mainListFilled = shouldDistributeViewportSlack(
-    snapshot.mainVisible.length,
-    lastMainViewportSizeRef.current
-  );
-  const personListFilled = shouldDistributeViewportSlack(
-    snapshot.personPanel.visibleMessages.length,
-    lastPersonViewportSizeRef.current
-  );
   const connectionStatusText = formatTransientConnectionStatus(
     snapshot.connectionStatus,
     retryDeadlineMs,
@@ -402,6 +411,7 @@ export default function App() {
   const backgroundTransparency = Math.round((1 - config.opacity) * 100);
 
   const updateConfig = async (patch: Partial<DisplayConfig>) => {
+    if (patch.personHistoryCount !== undefined) measurePersonCapacity.reset();
     const next = await client.updateConfig(patch);
     setConfig(next);
     return next;
@@ -422,6 +432,7 @@ export default function App() {
 
   const onMainMessageClick = async (message: DanmuMessage) => {
     setMessageContextMenu(null);
+    measurePersonCapacity.reset();
     await client.selectUserAnchor(message.messageId);
     await client.ackMainMessage(message.messageId);
   };
@@ -468,6 +479,7 @@ export default function App() {
     mainListMotion.cancel();
     const delta = wheelToViewportDelta(event);
     if (delta !== 0) {
+      measureMainCapacity.reset();
       void client.scrollMainViewport(delta);
     }
   };
@@ -480,6 +492,7 @@ export default function App() {
   const onPersonWheel = (event: React.WheelEvent<HTMLElement>) => {
     const delta = wheelToViewportDelta(event);
     if (delta !== 0) {
+      measurePersonCapacity.reset();
       void client.scrollPersonViewport(delta);
     }
   };
@@ -550,6 +563,10 @@ export default function App() {
       event.preventDefault();
     }
   };
+
+  const mainNewerTip = snapshot.mainHiddenNewerCount > 0 || snapshot.mainCacheNearFull
+    ? `还有 ${snapshot.mainHiddenNewerCount} 条更新${snapshot.mainCacheNearFull ? " - 即将爆满" : ""}`
+    : "";
 
   return (
     <main
@@ -662,16 +679,18 @@ export default function App() {
         >
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">
+              <span className="panel-kicker" title={snapshot.personPanel.selectedUid ?? undefined}>
                 {snapshot.personPanel.selectedUid
                   ? `UID ${snapshot.personPanel.selectedUid}`
                   : "UID"}
               </span>
-              <strong>{snapshot.personPanel.selectedNickname ?? "未选择"}</strong>
+              <strong title={snapshot.personPanel.selectedNickname ?? undefined}>
+                {snapshot.personPanel.selectedNickname ?? "未选择"}
+              </strong>
             </div>
           </div>
           <div
-            className={`person-list ${personListFilled ? "is-filled" : ""}`}
+            className="person-list"
             ref={personListRef}
           >
             {snapshot.personPanel.visibleMessages.map((message) => (
@@ -733,7 +752,7 @@ export default function App() {
         <section className="main-panel" onWheel={onMainWheel}>
           <div className="main-list-viewport">
             <div
-              className={`message-list ${mainListFilled ? "is-filled" : ""}`}
+              className="message-list"
               ref={mainListRef}
             >
               {snapshot.mainVisible.map((message) => (
@@ -760,14 +779,17 @@ export default function App() {
                     )}
                     <WealthMedal level={message.userLevel} />
                     <FanMedal message={message} />
-                    <strong
-                      className="nickname"
-                      style={{ color: getGuardNicknameColor(message.guardType) }}
-                    >
-                      {message.nickname}
-                    </strong>
-                    <span className="message-time">
-                      {formatHhMmSs(message.timestampMs)}
+                    <span className="message-author">
+                      <strong
+                        className="nickname"
+                        style={{ color: getGuardNicknameColor(message.guardType) }}
+                        title={message.nickname}
+                      >
+                        {message.nickname}
+                      </strong>
+                      <span className="message-time">
+                        {formatHhMmSs(message.timestampMs)}
+                      </span>
                     </span>
                   </span>
                   <span className="content-line">{message.content}</span>
@@ -777,12 +799,11 @@ export default function App() {
           </div>
           <div
             className="newer-tip main-newer-tip"
-            data-visible={snapshot.mainHiddenNewerCount > 0}
-            aria-hidden={snapshot.mainHiddenNewerCount === 0}
+            data-visible={Boolean(mainNewerTip)}
+            aria-hidden={!mainNewerTip}
+            title={mainNewerTip || undefined}
           >
-            {snapshot.mainHiddenNewerCount > 0
-              ? `还有 ${snapshot.mainHiddenNewerCount} 条更新`
-              : null}
+            {mainNewerTip}
           </div>
         </section>
       </section>

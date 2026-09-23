@@ -370,12 +370,15 @@ input {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 48px 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  container-type: inline-size;
   overflow: hidden;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .panel-header {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -383,13 +386,20 @@ input {
   padding: 8px 8px 7px 10px;
 }
 
+.panel-header > div {
+  min-width: 0;
+  width: 100%;
+}
+
 .panel-header strong {
   display: block;
-  max-width: 120px;
+  max-width: 100%;
   overflow: hidden;
   color: #f6fbfb;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 14px;
+  line-height: 18px;
 }
 
 .panel-kicker {
@@ -397,10 +407,14 @@ input {
   margin-bottom: 2px;
   color: #7f9695;
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .person-list,
 .message-list {
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -421,6 +435,7 @@ input {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr);
   align-items: start;
+  align-content: start;
   gap: 5px;
   padding: 5px 6px 5px 9px;
   border: 1px solid transparent;
@@ -432,6 +447,23 @@ input {
   transition:
     color 120ms ease,
     opacity 120ms ease;
+}
+
+@container (max-width: 150px) {
+  .person-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+}
+
+.person-row,
+.message-card {
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bili-pink) transparent;
 }
 
 .person-row:hover {
@@ -473,8 +505,9 @@ input {
 .newer-tip {
   box-sizing: border-box;
   height: 16px;
-  margin: 0 8px;
-  padding: 0 7px;
+  min-width: 0;
+  margin: 0 4px;
+  padding: 0 2px;
   border: 0;
   color: var(--bili-pink-soft);
   background: transparent;
@@ -482,6 +515,9 @@ input {
   font: inherit;
   font-size: 12px;
   line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .newer-tip[data-visible="false"] {
@@ -520,11 +556,6 @@ input {
   inset: 0;
   pointer-events: none;
   will-change: transform;
-}
-
-.person-list.is-filled,
-.message-list.is-filled {
-  justify-content: space-between;
 }
 
 .message-card {
@@ -578,9 +609,18 @@ input {
 .meta-line {
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
+}
+
+.message-author {
+  flex: 1 1 calc(4em + 54px);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .wealth-medal-ctnr {

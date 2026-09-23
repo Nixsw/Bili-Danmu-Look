@@ -307,7 +307,7 @@ describe("main message viewport", () => {
 
   it("exposes the global unread marker across scrolling, batch reads and cache trimming", () => {
     const store = createMessageStore({
-      mainCapacity: 3,
+      mainCapacity: 4,
       mainViewportSize: 2,
       personViewportSize: 5
     });
@@ -324,6 +324,8 @@ describe("main message viewport", () => {
     expect(store.getSnapshot().firstUnreadMessageId).toBe(2);
     store.ingest(baseRaw({ content: "D", uid: 3 }));
     store.ingest(baseRaw({ content: "E", uid: 3 }));
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(2);
+    store.ackMainMessage(2);
     expect(store.getSnapshot().firstUnreadMessageId).toBe(4);
     store.ackMessage(4);
     expect(store.getSnapshot().firstUnreadMessageId).toBe(5);
@@ -621,7 +623,7 @@ describe("person panel anchored viewport", () => {
     ]);
   });
 
-  it("keeps the anchor on the second row instead of bouncing through the first row", () => {
+  it("keeps the anchor on its current row when newer messages arrive", () => {
     const store = createMessageStore({ mainViewportSize: 8, personViewportSize: 5 });
     for (let i = 1; i <= 5; i += 1) {
       store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
@@ -630,25 +632,25 @@ describe("person panel anchored viewport", () => {
     store.selectUserAnchor(3);
     store.ingest(baseRaw({ content: "M6", uid: 42, timestampMs: 6 }));
     expect(store.getPersonPanel().visibleMessages.map((msg) => msg.content)).toEqual([
+      "M1",
       "M2",
       "M3",
       "M4",
-      "M5",
-      "M6"
+      "M5"
     ]);
 
     store.ingest(baseRaw({ content: "M7", uid: 42, timestampMs: 7 }));
 
     const panel = store.getPersonPanel();
     expect(panel.visibleMessages.map((msg) => msg.content)).toEqual([
+      "M1",
       "M2",
       "M3",
       "M4",
-      "M5",
-      "M6"
+      "M5"
     ]);
-    expect(panel.visibleMessages.findIndex((msg) => msg.messageId === panel.anchorMessageId)).toBe(1);
-    expect(panel.hiddenNewerCount).toBe(1);
+    expect(panel.visibleMessages.findIndex((msg) => msg.messageId === panel.anchorMessageId)).toBe(2);
+    expect(panel.hiddenNewerCount).toBe(2);
   });
 
   it("preserves the selected anchor when trimming the per-user message cache", () => {
@@ -679,30 +681,28 @@ describe("person panel anchored viewport", () => {
 
   it("preserves the selected anchor when trimming the main message cache", () => {
     const store = createMessageStore({
-      mainCapacity: 5,
-      perUserCapacity: 10,
+      mainCapacity: 10,
+      perUserCapacity: 20,
       mainViewportSize: 5,
-      personViewportSize: 5
+      personViewportSize: 3
     });
     for (let i = 1; i <= 5; i += 1) {
       store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
     }
 
     store.selectUserAnchor(3);
-    for (let i = 6; i <= 8; i += 1) {
+    for (let i = 6; i <= 12; i += 1) {
       store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
     }
 
     const panel = store.getPersonPanel();
     expect(panel.visibleMessages.some((msg) => msg.messageId === panel.anchorMessageId)).toBe(true);
     expect(panel.visibleMessages.map((msg) => msg.content)).toEqual([
+      "M2",
       "M3",
-      "M4",
-      "M5",
-      "M6",
-      "M7"
+      "M4"
     ]);
-    expect(panel.hiddenNewerCount).toBe(1);
+    expect(panel.hiddenNewerCount).toBe(6);
   });
 
   it("allows the anchor on the first row when no earlier history exists", () => {
@@ -745,13 +745,13 @@ describe("person panel anchored viewport", () => {
     store.setPersonPanelHover(false);
 
     expect(store.getPersonPanel().visibleMessages.map((msg) => msg.content)).toEqual([
+      "M1",
       "M2",
       "M3",
       "M4",
-      "M5",
-      "M6"
+      "M5"
     ]);
-    expect(store.getPersonPanel().hiddenNewerCount).toBe(0);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(1);
   });
 
   it("scrolls selected person history and newer messages while keeping newer count accurate", () => {

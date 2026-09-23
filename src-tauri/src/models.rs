@@ -77,6 +77,7 @@ pub struct AppSnapshot {
     pub main_visible: Vec<DanmuMessage>,
     pub first_unread_message_id: Option<u64>,
     pub main_hidden_newer_count: usize,
+    pub main_cache_near_full: bool,
     pub main_viewport_revision: u64,
     pub main_viewport_motion: Option<MainViewportMotion>,
     pub person_panel: PersonPanelSnapshot,

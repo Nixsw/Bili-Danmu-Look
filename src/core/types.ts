@@ -61,6 +61,7 @@ export interface AppSnapshot {
   mainVisible: DanmuMessage[];
   firstUnreadMessageId: number | null;
   mainHiddenNewerCount: number;
+  mainCacheNearFull: boolean;
   mainViewportRevision: number;
   mainViewportMotion: "advance" | "locate" | null;
   personPanel: PersonPanelSnapshot;

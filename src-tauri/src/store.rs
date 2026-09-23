@@ -2,7 +2,10 @@ use crate::models::{
     normalize_incoming, AppSnapshot, DanmuMessage, IncomingDanmuRaw, MainViewportMotion,
     PersonPanelSnapshot,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+#[cfg(test)]
+mod cache_tests;
 
 pub struct MessageStore {
     next_message_id: u64,
@@ -31,8 +34,8 @@ impl MessageStore {
     pub fn new(main_capacity: usize, per_user_capacity: usize) -> Self {
         Self {
             next_message_id: 1,
-            main_capacity,
-            per_user_capacity,
+            main_capacity: main_capacity.max(1),
+            per_user_capacity: per_user_capacity.max(1),
             main_viewport_size: 22,
             person_viewport_size: 14,
             person_history_count: 1,
@@ -55,6 +58,7 @@ impl MessageStore {
 
     pub fn ingest(&mut self, raw: IncomingDanmuRaw) -> Result<DanmuMessage, String> {
         let keep_main_pinned_to_bottom = self.is_main_viewport_at_bottom();
+        let protected_person_ids = self.protected_person_ids();
         let message = normalize_incoming(raw, self.next_message_id)?;
         self.next_message_id += 1;
         self.messages.push_back(message.clone());
@@ -64,14 +68,13 @@ impl MessageStore {
             .or_default()
             .push_back(message.message_id);
 
-        self.trim_main_capacity();
-        self.trim_user_capacity(&message.uid);
+        self.trim_main_capacity(&protected_person_ids);
+        self.trim_user_capacity(&message.uid, &protected_person_ids);
         if keep_main_pinned_to_bottom {
             self.pin_main_viewport_to_bottom();
         } else {
             self.clamp_main_viewport_start();
         }
-        self.refresh_person_start_after_data_change(&message.uid);
         Ok(message)
     }
 
@@ -108,11 +111,9 @@ impl MessageStore {
 
     pub fn ack_user_messages(&mut self, uid: &str) {
         let advances_unread = self.first_unread().map(|message| message.uid.as_str()) == Some(uid);
-        if let Some(user_ids) = self.ids_by_uid.get(uid) {
-            for message_id in user_ids {
-                if let Some(message) = self.by_id.get_mut(message_id) {
-                    message.read = true;
-                }
+        for message in self.by_id.values_mut() {
+            if message.uid == uid {
+                message.read = true;
             }
         }
 
@@ -131,18 +132,27 @@ impl MessageStore {
         let Some(message) = self.by_id.get(&message_id) else {
             return;
         };
-        self.selected_uid = Some(message.uid.clone());
+        let uid = message.uid.clone();
+        self.selected_uid = Some(uid.clone());
         self.anchor_message_id = Some(message_id);
         self.hover_frozen = false;
         self.person_manual_viewport = false;
+        // Main history can still contain messages evicted from the smaller UID index.
+        let user_ids = self.ids_by_uid.entry(uid.clone()).or_default();
+        if !user_ids.contains(&message_id) {
+            let index = user_ids
+                .iter()
+                .position(|id| *id > message_id)
+                .unwrap_or(user_ids.len());
+            user_ids.insert(index, message_id);
+        }
+        self.person_start_index = self.compute_anchored_person_start();
+        self.trim_user_capacity(&uid, &self.protected_person_ids());
         self.person_start_index = self.compute_anchored_person_start();
     }
 
     pub fn set_person_panel_hover(&mut self, value: bool) {
         self.hover_frozen = value;
-        if !value && !self.person_manual_viewport {
-            self.person_start_index = self.compute_anchored_person_start();
-        }
     }
 
     pub fn scroll_main_viewport(&mut self, delta: isize) {
@@ -208,6 +218,9 @@ impl MessageStore {
         }
 
         if let Some(value) = person_viewport_size {
+            if clamp_viewport_size(value) == self.person_viewport_size {
+                return;
+            }
             self.person_viewport_size = clamp_viewport_size(value);
             if self.person_manual_viewport {
                 self.person_start_index = clamp_viewport_start(
@@ -233,6 +246,8 @@ impl MessageStore {
             main_visible: self.main_visible(),
             first_unread_message_id: self.first_unread().map(|message| message.message_id),
             main_hidden_newer_count: self.main_hidden_newer_count(),
+            main_cache_near_full: self.messages.iter().filter(|message| !message.read).count()
+                >= self.main_capacity - self.main_capacity / 10,
             main_viewport_revision: self.main_viewport_revision,
             main_viewport_motion: self.main_viewport_motion,
             person_panel: self.person_panel(),
@@ -270,14 +285,42 @@ impl MessageStore {
         }
     }
 
-    fn trim_main_capacity(&mut self) {
-        while self.messages.len() > self.main_capacity {
-            if let Some(removed) = self.messages.pop_front() {
-                if Some(removed.message_id) != self.anchor_message_id {
-                    self.by_id.remove(&removed.message_id);
-                    self.remove_message_from_user_index(&removed);
+    fn trim_main_capacity(&mut self, protected_person_ids: &HashSet<u64>) {
+        if self.messages.len() < self.main_capacity || self.messages.len() <= 1 {
+            return;
+        }
+        let target_size = self
+            .main_capacity
+            .saturating_sub(self.main_capacity.div_ceil(10))
+            .max(1);
+        let latest_id = self.messages.back().map(|message| message.message_id);
+        // Preserve the anchor, prefer offscreen rows, then oldest read rows before unread.
+        let mut candidates = self
+            .messages
+            .iter()
+            .filter(|message| Some(message.message_id) != self.anchor_message_id)
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|message| {
+            (
+                protected_person_ids.contains(&message.message_id)
+                    || Some(message.message_id) == latest_id,
+                !message.read,
+                message.message_id,
+            )
+        });
+        let removed_ids = candidates
+            .into_iter()
+            .take(self.messages.len() - target_size)
+            .map(|message| message.message_id)
+            .collect::<HashSet<_>>();
+        for index in (0..self.messages.len()).rev() {
+            if removed_ids.contains(&self.messages[index].message_id) {
+                let removed = self.messages.remove(index).expect("existing message index");
+                self.by_id.remove(&removed.message_id);
+                self.remove_message_from_user_index(&removed);
+                if index < self.main_start_index {
+                    self.main_start_index -= 1;
                 }
-                self.main_start_index = self.main_start_index.saturating_sub(1);
             }
         }
     }
@@ -296,15 +339,16 @@ impl MessageStore {
             self.person_start_index = self.person_start_index.saturating_sub(1);
         }
         if is_selected_uid {
-            self.person_start_index = clamp_viewport_start(
-                self.person_start_index,
-                user_ids.len(),
-                self.person_viewport_size,
-            );
+            self.person_start_index = self
+                .person_start_index
+                .min(user_ids.len().saturating_sub(1));
+        }
+        if user_ids.is_empty() {
+            self.ids_by_uid.remove(&message.uid);
         }
     }
 
-    fn trim_user_capacity(&mut self, uid: &str) {
+    fn trim_user_capacity(&mut self, uid: &str, protected_person_ids: &HashSet<u64>) {
         let preserved_anchor_id = if self.selected_uid.as_deref() == Some(uid) {
             self.anchor_message_id
         } else {
@@ -315,29 +359,40 @@ impl MessageStore {
         };
         while user_ids.len() > self.per_user_capacity {
             let remove_index = preserved_anchor_id
-                .filter(|anchor_id| user_ids.iter().any(|id| id == anchor_id))
-                .and_then(|anchor_id| user_ids.iter().position(|id| *id != anchor_id))
+                .and_then(|anchor_id| {
+                    // Keep the newest arrival too; only tiny, entirely visible caches
+                    // need to sacrifice a visible non-anchor row to stay bounded.
+                    user_ids
+                        .iter()
+                        .take(user_ids.len() - 1)
+                        .position(|id| !protected_person_ids.contains(id))
+                        .or_else(|| user_ids.iter().position(|id| *id != anchor_id))
+                })
                 .unwrap_or(0);
 
             user_ids.remove(remove_index);
-            if remove_index < self.person_start_index {
-                self.person_start_index = self.person_start_index.saturating_sub(1);
+            if self.selected_uid.as_deref() == Some(uid) {
+                if remove_index < self.person_start_index {
+                    self.person_start_index -= 1;
+                }
+                self.person_start_index = self
+                    .person_start_index
+                    .min(user_ids.len().saturating_sub(1));
             }
-            self.person_start_index = clamp_viewport_start(
-                self.person_start_index,
-                user_ids.len(),
-                self.person_viewport_size,
-            );
         }
     }
 
-    fn refresh_person_start_after_data_change(&mut self, uid: &str) {
-        if self.selected_uid.as_deref() != Some(uid) || self.anchor_message_id.is_none() {
-            return;
+    fn protected_person_ids(&self) -> HashSet<u64> {
+        let mut ids = self
+            .selected_user_ids()
+            .into_iter()
+            .skip(self.person_start_index)
+            .take(self.person_viewport_size)
+            .collect::<HashSet<_>>();
+        if let Some(anchor_id) = self.anchor_message_id {
+            ids.insert(anchor_id);
         }
-        if !self.hover_frozen && !self.person_manual_viewport {
-            self.person_start_index = self.compute_anchored_person_start();
-        }
+        ids
     }
 
     fn is_main_viewport_at_bottom(&self) -> bool {
@@ -685,10 +740,13 @@ mod tests {
 
     #[test]
     fn snapshot_tracks_global_unread_across_scrolling_reads_and_trimming() {
-        let mut store = MessageStore::new(3, 50);
+        let mut store = MessageStore::new(4, 50);
         store.main_viewport_size = 2;
         let empty = serde_json::to_value(store.snapshot()).unwrap();
-        assert_eq!(empty.get("firstUnreadMessageId"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            empty.get("firstUnreadMessageId"),
+            Some(&serde_json::Value::Null)
+        );
         store.ingest(raw("A", 1, 1)).unwrap();
         store.ingest(raw("B", 2, 2)).unwrap();
         store.ingest(raw("C", 1, 3)).unwrap();
@@ -703,6 +761,8 @@ mod tests {
         assert_eq!(store.snapshot().first_unread_message_id, Some(2));
         store.ingest(raw("D", 3, 4)).unwrap();
         store.ingest(raw("E", 3, 5)).unwrap();
+        assert_eq!(store.snapshot().first_unread_message_id, Some(2));
+        store.ack_main_message(2);
         assert_eq!(store.snapshot().first_unread_message_id, Some(4));
         store.ack_message(4);
         assert_eq!(store.snapshot().first_unread_message_id, Some(5));
@@ -939,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn person_anchor_stays_on_second_row_instead_of_bouncing_through_first_row() {
+    fn person_anchor_stays_on_its_current_row_when_new_messages_arrive() {
         let mut store = MessageStore::new(1000, 50);
         store.person_viewport_size = 5;
         for i in 1..=5 {
@@ -948,7 +1008,7 @@ mod tests {
 
         store.select_user_anchor(3);
         store.ingest(raw("M6", 42, 6)).unwrap();
-        assert_eq!(person_contents(&store), ["M2", "M3", "M4", "M5", "M6"]);
+        assert_eq!(person_contents(&store), ["M1", "M2", "M3", "M4", "M5"]);
 
         store.ingest(raw("M7", 42, 7)).unwrap();
         let panel = store.snapshot().person_panel;
@@ -962,9 +1022,9 @@ mod tests {
             .iter()
             .position(|message| Some(message.message_id) == panel.anchor_message_id);
 
-        assert_eq!(visible, ["M2", "M3", "M4", "M5", "M6"]);
-        assert_eq!(anchor_row, Some(1));
-        assert_eq!(panel.hidden_newer_count, 1);
+        assert_eq!(visible, ["M1", "M2", "M3", "M4", "M5"]);
+        assert_eq!(anchor_row, Some(2));
+        assert_eq!(panel.hidden_newer_count, 2);
     }
 
     #[test]
@@ -997,15 +1057,15 @@ mod tests {
 
     #[test]
     fn person_anchor_is_preserved_when_trimming_main_message_cache() {
-        let mut store = MessageStore::new(5, 10);
+        let mut store = MessageStore::new(10, 20);
         store.main_viewport_size = 5;
-        store.person_viewport_size = 5;
+        store.person_viewport_size = 3;
         for i in 1..=5 {
             store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
         }
 
         store.select_user_anchor(3);
-        for i in 6..=8 {
+        for i in 6..=12 {
             store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
         }
 
@@ -1021,8 +1081,8 @@ mod tests {
             .any(|message| Some(message.message_id) == panel.anchor_message_id);
 
         assert!(anchor_visible);
-        assert_eq!(visible, ["M3", "M4", "M5", "M6", "M7"]);
-        assert_eq!(panel.hidden_newer_count, 1);
+        assert_eq!(visible, ["M2", "M3", "M4"]);
+        assert_eq!(panel.hidden_newer_count, 6);
     }
 
     #[test]
