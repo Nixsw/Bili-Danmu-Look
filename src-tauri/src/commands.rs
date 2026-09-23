@@ -96,6 +96,19 @@ pub fn ack_message(
 }
 
 #[tauri::command]
+pub fn ack_main_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    message_id: u64,
+) -> Result<(), String> {
+    {
+        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+        inner.store.ack_main_message(message_id);
+    }
+    emit_snapshot(&app, &state)
+}
+
+#[tauri::command]
 pub fn ack_user_messages(
     app: AppHandle,
     state: State<'_, AppState>,

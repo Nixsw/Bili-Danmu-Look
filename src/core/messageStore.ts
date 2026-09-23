@@ -116,6 +116,9 @@ function normalizeSuperChat(superChat?: SuperChatInfo) {
 export function createMessageStore(options: MessageStoreOptions) {
   let nextMessageId = 1;
   let mainStartIndex = 0;
+  let mainTopAligned = false;
+  let mainViewportRevision = 0;
+  let mainViewportMotion: AppSnapshot["mainViewportMotion"] = null;
   let selectedUid: string | null = null;
   let anchorMessageId: number | null = null;
   let personStartIndex = 0;
@@ -159,20 +162,27 @@ export function createMessageStore(options: MessageStoreOptions) {
       return message;
     },
 
+    ackMainMessage(messageId: number) {
+      if (firstUnread()?.messageId === messageId) {
+        api.ackMessage(messageId);
+      }
+    },
+
     ackMessage(messageId: number) {
       const message = byId.get(messageId);
-      if (!message) {
+      if (!message || message.read) {
         return;
       }
 
+      const advancesUnread = firstUnread()?.messageId === messageId;
       message.read = true;
-      while (messages[mainStartIndex]?.read) {
-        mainStartIndex += 1;
+      if (advancesUnread) {
+        alignMainToUnread("advance");
       }
-      clampMainViewportStart();
     },
 
     ackUserMessages(uid: string) {
+      const advancesUnread = firstUnread()?.uid === String(uid);
       const userIds = idsByUid.get(String(uid)) ?? [];
       for (const messageId of userIds) {
         const message = byId.get(messageId);
@@ -187,10 +197,9 @@ export function createMessageStore(options: MessageStoreOptions) {
         }
       }
 
-      while (messages[mainStartIndex]?.read) {
-        mainStartIndex += 1;
+      if (advancesUnread) {
+        alignMainToUnread("advance");
       }
-      clampMainViewportStart();
     },
 
     selectUserAnchor(messageId: number) {
@@ -214,23 +223,18 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     scrollMainViewport(delta: number) {
-      mainStartIndex = scrollViewportStart(
-        mainStartIndex,
-        delta,
-        messages.length,
-        mainViewportSize
-      );
+      if (!Number.isFinite(delta) || delta === 0) return;
+      const normalMax = maxViewportStart(messages.length, mainViewportSize);
+      // A wheel step from a short, top-aligned tail must not jump backwards.
+      const maxStart = mainTopAligned ? Math.max(normalMax, mainStartIndex) : normalMax;
+      mainStartIndex = Math.min(maxStart, Math.max(0, mainStartIndex + Math.trunc(delta)));
+      mainTopAligned = mainStartIndex > normalMax;
+      mainViewportRevision += 1;
+      mainViewportMotion = null;
     },
 
     jumpMainViewportToUnread() {
-      const maxStart = maxViewportStart(messages.length, mainViewportSize);
-      const firstUnreadIndex = messages.findIndex(
-        (message, index) => index >= mainStartIndex && !message.read
-      );
-      mainStartIndex = Math.min(
-        firstUnreadIndex >= 0 ? firstUnreadIndex : maxStart,
-        maxStart
-      );
+      alignMainToUnread("locate");
     },
 
     scrollPersonViewport(delta: number) {
@@ -320,6 +324,8 @@ export function createMessageStore(options: MessageStoreOptions) {
         connectionStatus,
         mainVisible: api.getMainVisible(),
         mainHiddenNewerCount: getMainHiddenNewerCount(),
+        mainViewportRevision,
+        mainViewportMotion,
         personPanel: api.getPersonPanel()
       };
     }
@@ -410,6 +416,7 @@ export function createMessageStore(options: MessageStoreOptions) {
 
   function isMainViewportAtBottom() {
     return (
+      !mainTopAligned &&
       messages.length > mainViewportSize &&
       mainStartIndex >= maxViewportStart(messages.length, mainViewportSize)
     );
@@ -420,11 +427,22 @@ export function createMessageStore(options: MessageStoreOptions) {
   }
 
   function clampMainViewportStart() {
-    mainStartIndex = clampViewportStart(
-      mainStartIndex,
-      messages.length,
-      mainViewportSize
-    );
+    mainStartIndex = Math.min(mainStartIndex, mainTopAligned
+      ? Math.max(0, messages.length - 1)
+      : maxViewportStart(messages.length, mainViewportSize));
+  }
+
+  function firstUnread() {
+    return messages.find((message) => !message.read);
+  }
+
+  function alignMainToUnread(motion: NonNullable<AppSnapshot["mainViewportMotion"]>) {
+    const index = messages.findIndex((message) => !message.read);
+    const previousStart = mainStartIndex;
+    mainTopAligned = index >= 0;
+    mainStartIndex = index >= 0 ? index : maxViewportStart(messages.length, mainViewportSize);
+    mainViewportRevision += 1;
+    mainViewportMotion = index >= 0 && previousStart !== mainStartIndex ? motion : null;
   }
 
   function getMainHiddenNewerCount() {

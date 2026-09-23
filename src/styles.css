@@ -440,12 +440,26 @@ input {
   overflow: hidden;
 }
 
+.main-list-viewport {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .message-list {
   height: 100%;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   gap: 7px;
+}
+
+.main-scroll-outgoing {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  will-change: transform;
 }
 
 .person-list.is-filled,
