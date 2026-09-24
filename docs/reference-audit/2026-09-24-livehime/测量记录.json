@@ -1,0 +1,242 @@
+{
+  "source": "02-user-settings-reference.png",
+  "sourceKind": "用户明确指定的截图",
+  "imageWidth": 696,
+  "imageHeight": 570,
+  "format": "PNG（无损图片）",
+  "coordinateUnit": "截图像素",
+  "note": "颜色为原图显示像素值；尺寸包含抗锯齿边缘。未取得官方源码样式常量，未校准系统显示缩放。",
+  "colorSamples": [
+    {
+      "color": "#17181A",
+      "point": [
+        490,
+        280
+      ],
+      "name": "设置主体"
+    },
+    {
+      "color": "#101011",
+      "point": [
+        600,
+        160
+      ],
+      "name": "分组底"
+    },
+    {
+      "color": "#2A2A2B",
+      "point": [
+        550,
+        144
+      ],
+      "name": "分组边框"
+    },
+    {
+      "color": "#2E2F31",
+      "point": [
+        340,
+        15
+      ],
+      "name": "窗口边框"
+    },
+    {
+      "color": "#FF6699",
+      "point": [
+        520,
+        194
+      ],
+      "name": "粉色已选轨道"
+    },
+    {
+      "color": "#343434",
+      "point": [
+        567,
+        248
+      ],
+      "name": "字号未选轨道"
+    },
+    {
+      "color": "#FFFFFF",
+      "point": [
+        613,
+        194
+      ],
+      "name": "白色滑块"
+    },
+    {
+      "region": [
+        481,
+        160,
+        70,
+        16
+      ],
+      "color": "#E7E9EB",
+      "name": "标签实心字形"
+    },
+    {
+      "region": [
+        628,
+        184,
+        34,
+        21
+      ],
+      "color": "#A2A7AE",
+      "name": "数值实心字形"
+    },
+    {
+      "region": [
+        510,
+        518,
+        20,
+        20
+      ],
+      "color": "#484C53",
+      "name": "次按钮"
+    },
+    {
+      "color": "#232427",
+      "point": [
+        290,
+        161
+      ],
+      "name": "预览标题分隔线"
+    },
+    {
+      "color": "#121315",
+      "point": [
+        290,
+        451
+      ],
+      "name": "预览两区分隔条"
+    }
+  ],
+  "measuredGeometry": {
+    "trackScan": {
+      "yEnd": 195,
+      "x": 525,
+      "yStart": 192
+    },
+    "groupRectApprox": [
+      470,
+      144,
+      202,
+      124
+    ],
+    "fontTickCount": 5,
+    "sliderRowDistance": 54,
+    "tickDiameter": 6,
+    "trackHeight": 4,
+    "fontTickCentersApprox": [
+      487,
+      518,
+      550,
+      581,
+      613
+    ],
+    "thumbScan": {
+      "yEnd": 252,
+      "x": 550,
+      "yStart": 243
+    },
+    "thumbDiameter": 10,
+    "trackCenterDistance": 126,
+    "tickScan": {
+      "yEnd": 250,
+      "x": 581,
+      "yStart": 245
+    }
+  },
+  "sourceControlState": {
+    "opacityLabel": "不透明度",
+    "opacityValue": "100%",
+    "fontSizeLabel": "字号大小",
+    "fontSizeValue": "中等",
+    "fontSelectedTick": 3
+  },
+  "adaptationNotes": [
+    "用户已要求透明度和字号按目标参考窗口的口径调整，取代早先保留现有口径的建议。",
+    "界面使用不透明度，百分比直接表示背景不透明度，向右增加时背景更不透明；端点为10%至100%，键盘每次1个百分点，鼠标拖动内部量化方式未读取。",
+    "字号大小采用参考窗口的5档：较小10、推荐12、中等14、较大16、特大18像素；在用户确认的100%系统缩放下通过重复汉字间距实测，不继续沿用当前7档口径。",
+    "标签上置，轨道与数值同行，保持设置面板整体结构。",
+    "保留现有9像素分隔条操作宽度和24像素滑块操作高度。"
+  ],
+  "independentWindowNormalState": {
+    "source": "03-interaction-normal.jpg",
+    "sourceKind": "用户手动摆放后，电脑工具只读采集的真实独立浮窗",
+    "imageSize": [320, 561],
+    "format": "JPEG（有损图片）",
+    "background": "#17181A",
+    "leftBorderSample": "#2E2F31",
+    "titleSeparatorSample": "#27282A",
+    "splitterBandSampleRange": ["#111214", "#131416", "#141517"],
+    "cornerRadiusApprox": 8,
+    "borderWidthApprox": 1,
+    "splitterCenterYApprox": 318,
+    "titleBarHeightApprox": 44,
+    "coordinateUnit": "截图像素，未校准系统显示缩放",
+    "note": "四角完整可见，确认小圆角和中性灰细边框；数值为显示结果估计，不是官方源码常量。仅迁移风格，不复制窗口尺寸、标题栏高度或上下布局。"
+  },
+  "titleControlHover": {
+    "source": "11-title-settings-hover.jpg",
+    "control": "设置齿轮",
+    "cursor": "手形",
+    "colorMeasurement": "鼠标与蓝色光晕覆盖部分图标，无法可靠分离并采样悬停图标色和背景色。",
+    "note": "不能把蓝色鼠标光晕视为官方按钮的背景或阴影。"
+  },
+  "splitterObservedStates": {
+    "hoverSource": "04-splitter-hover.jpg",
+    "hoverAppearance": "约3像素粉色横线，中央约20乘14像素白色小圆角手柄，鼠标为上下缩放箭头",
+    "hoverColorNote": "有损图粉色数值有压缩偏移；复刻建议使用已在无损图确认的统一强调色#FF6699，不能把此建议当成浮窗源码取色。",
+    "afterDragSource": "05-splitter-after-drag.jpg",
+    "beforeCenterYApprox": 318,
+    "afterCenterYApprox": 352,
+    "observedMovementYApprox": 34,
+    "sameWindowSizeBeforeAfter": [320, 561],
+    "afterReleaseAndPointerExit": "分隔位置保留，粉线与白色手柄消失，恢复暗线和灰色中央方向提示",
+    "pressedSource": "06-splitter-pressed.jpg",
+    "pressedAppearance": "用户按约定拖回并保持按住时采集：粉线保持，中央手柄由白色变为浅灰",
+    "pressedHandleSample": "#C5C6C8",
+    "pressedCenterYApprox": 291,
+    "pressedEvidenceBoundary": "用户手动操作与对应截图；未读取按键事件；颜色受有损压缩影响。",
+    "adaptation": "旋转为左右分区使用的竖线、约14乘20像素中央手柄和左右缩放指针；保留现有左右布局及消息样式。"
+  },
+  "opacityObservedRange": {
+    "minimum": 10,
+    "minimumSource": "07-settings-opacity-min.jpg",
+    "maximum": 100,
+    "maximumSource": "02-user-settings-reference.png",
+    "maximumLiveSource": "10-settings-font-largest.jpg",
+    "unit": "百分比",
+    "lowOpacityWindowSource": "08-interaction-opacity-min.jpg",
+    "liveUpdate": "设置拖至最左端后，预览和独立浮窗立即透出下方画面，尚未点击确定。",
+    "foregroundObservation": "标题、图标与文字仍清晰可见，没有与背景一起降至相同透明程度。",
+    "existingBackendRange": [0.45, 0.98],
+    "existingBackendSource": "src-tauri/src/app_config.rs:92-96",
+    "keyboardStepAtUpperEndpoint": 1,
+    "keyboardStepEvidence": "用户点击圆点后按一次左方向键，回报100%变为99%；未单独截图。",
+    "restoration": "用户按要求恢复100%和中等字号并确认；后续浮窗画面显示不透明深灰背景及较之前特大档更小的消息文字。",
+    "internalStep": null
+  },
+  "fontSizeObservedPresets": {
+    "labelsFromLeftToRight": ["较小", "推荐", "中等", "较大", "特大"],
+    "labelEvidence": "用户逐档点选并回报五个显示名称。",
+    "smallPresetSource": "09-settings-font-small.jpg",
+    "smallPresetOpacity": 10,
+    "middlePresetSource": "02-user-settings-reference.png",
+    "largestPresetSource": "10-settings-font-largest.jpg",
+    "largestPresetOpacity": 100,
+    "actualFontSizes": [10, 12, 14, 16, 18],
+    "fontSizeValueKind": "100%系统缩放下以真实浮窗重复汉字间距核对的等效像素字号，未读取官方源码变量。",
+    "measurementDetails": "字号实测.json",
+    "liveSamples": ["12-font-small-live.jpg", "13-font-recommended-live.jpg", "14-font-medium-live.jpg", "15-font-larger-live.jpg", "16-font-largest-live.jpg"],
+    "scopeObservation": "同一条十个国字测试消息逐档切换；窗口320乘561像素、不透明度100%和系统缩放100%保持一致。五档通过100和140两组亮度阈值复核。只测字号，不复制消息颜色和其他内容样式。"
+  },
+  "unverified": [
+    "独立窗口圆角的源码精确值及显示缩放换算",
+    "标题栏控件悬停时精确配色及按下态",
+    "分隔条松手但仍悬停时的单独画面",
+    "不透明度鼠标拖动的内部量化方式",
+    "设置取消回滚及持久化时机",
+    "滑块悬停和按下状态"
+  ]
+}

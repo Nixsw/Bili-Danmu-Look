@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
+  ChevronsLeftRight,
   LocateFixed,
   Minus,
   Settings
@@ -8,6 +9,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createDanmuClient, type DisplayConfig } from "./api/client";
 import type { AppSnapshot, DanmuMessage } from "./core/types";
+import { MESSAGE_SIZE_PRESETS } from "./core/displaySettings";
 import { formatHhMmSs, formatMmSs, getGuardNicknameColor } from "./ui/format";
 import {
   getSplitLayout,
@@ -369,7 +371,7 @@ export default function App() {
   );
   const mainUnreadAnchorAction = getMainUnreadAnchorAction();
   const windowDismissAction = getWindowDismissAction();
-  const backgroundTransparency = Math.round((1 - config.opacity) * 100);
+  const backgroundOpacity = Math.round(config.opacity * 100);
 
   const updateConfig = async (patch: Partial<DisplayConfig>) => {
     if (patch.personHistoryCount !== undefined) measurePersonCapacity.reset();
@@ -610,7 +612,7 @@ export default function App() {
 
       {settingsOpen && (
         <section className="settings-popover">
-          <div className="settings-connection">
+          <div className="settings-group settings-connection" role="group" aria-label="接口配置">
             <label htmlFor="connect-api-url">接口地址</label>
             <div className="settings-connection-row">
               <input
@@ -637,34 +639,38 @@ export default function App() {
               <p className="settings-status" role="status">{connectApiSaveStatus}</p>
             )}
           </div>
-          <SettingsSlider
-            id="background-transparency"
-            label="背景透明度"
-            min={2}
-            max={55}
-            value={backgroundTransparency}
-            valueLabel={`${backgroundTransparency}%`}
-            onChange={(value) => updateConfig({ opacity: (100 - value) / 100 })}
-          />
-          <SettingsSlider
-            id="message-size"
-            label="消息显示大小"
-            min={12}
-            max={18}
-            value={config.fontSize}
-            valueLabel={`${getMessageSizeLabel(config.fontSize)} · ${config.fontSize}`}
-            onChange={(value) => updateConfig({ fontSize: value })}
-          />
-          <SettingsSlider
-            id="person-history-count"
-            label="左侧默认展示历史条数"
-            min={0}
-            max={3}
-            value={config.personHistoryCount}
-            valueLabel={`${config.personHistoryCount} 条`}
-            onChange={(value) => updateConfig({ personHistoryCount: value })}
-          />
-          <div className="settings-clear-section">
+          <div className="settings-group settings-appearance" role="group" aria-label="外观">
+            <SettingsSlider
+              id="background-opacity"
+              label="不透明度"
+              min={10}
+              max={100}
+              value={backgroundOpacity}
+              valueLabel={`${backgroundOpacity}%`}
+              onChange={(value) => updateConfig({ opacity: value / 100 })}
+            />
+            <SettingsSlider
+              id="message-size"
+              label="字号大小"
+              min={10}
+              max={18}
+              step={2}
+              ticks={MESSAGE_SIZE_PRESETS.map((preset) => preset.value)}
+              value={config.fontSize}
+              valueLabel={getMessageSizeLabel(config.fontSize)}
+              onChange={(value) => updateConfig({ fontSize: value })}
+            />
+            <SettingsSlider
+              id="person-history-count"
+              label="左侧默认展示历史条数"
+              min={0}
+              max={3}
+              value={config.personHistoryCount}
+              valueLabel={`${config.personHistoryCount} 条`}
+              onChange={(value) => updateConfig({ personHistoryCount: value })}
+            />
+          </div>
+          <div className="settings-group settings-clear-section" role="group" aria-label="清除消息">
             <div className="settings-clear-actions">
               <button
                 type="button"
@@ -774,7 +780,11 @@ export default function App() {
             aria-orientation="vertical"
             title="拖动调整两栏宽度"
             onPointerDown={onSplitterPointerDown}
-          />
+          >
+            <span className="splitter-grip" aria-hidden="true">
+              <ChevronsLeftRight size={12} strokeWidth={1.5} />
+            </span>
+          </div>
         )}
 
         <section className="main-panel" onWheel={onMainWheel}>
@@ -875,12 +885,14 @@ export default function App() {
 }
 
 function SettingsSlider({
-  id, label, min, max, value, valueLabel, onChange
+  id, label, min, max, step = 1, ticks, value, valueLabel, onChange
 }: {
   id: string;
   label: string;
   min: number;
   max: number;
+  step?: number;
+  ticks?: readonly number[];
   value: number;
   valueLabel: string;
   onChange: (value: number) => void;
@@ -888,23 +900,35 @@ function SettingsSlider({
   const progress = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
   return (
     <label className="settings-slider" htmlFor={id}>
-      <span className="settings-slider-heading">
-        <span>{label}</span>
+      <span>{label}</span>
+      <span className="settings-slider-row">
+        <span className="settings-range-control">
+          <input
+            id={id}
+            className="settings-range"
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            aria-label={label}
+            aria-valuetext={valueLabel}
+            style={{ "--range-progress": `${progress}%` } as React.CSSProperties}
+            onChange={(event) => onChange(Number(event.target.value))}
+          />
+          {ticks && (
+            <span className="settings-range-ticks" aria-hidden="true">
+              {ticks.map((tick) => (
+                <span
+                  key={tick}
+                  style={{ left: `${((tick - min) / (max - min)) * 100}%` }}
+                />
+              ))}
+            </span>
+          )}
+        </span>
         <output className="settings-value" htmlFor={id}>{valueLabel}</output>
       </span>
-      <input
-        id={id}
-        className="settings-range"
-        type="range"
-        min={min}
-        max={max}
-        step={1}
-        value={value}
-        aria-label={label}
-        aria-valuetext={valueLabel}
-        style={{ "--range-progress": `${progress}%` } as React.CSSProperties}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
     </label>
   );
 }

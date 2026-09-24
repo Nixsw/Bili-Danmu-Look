@@ -90,10 +90,10 @@ impl AppConfig {
             }
         }
         if let Some(value) = patch.opacity {
-            self.opacity = value.clamp(0.45, 0.98);
+            self.opacity = normalize_opacity(value);
         }
         if let Some(value) = patch.font_size {
-            self.font_size = value.clamp(12, 18);
+            self.font_size = normalize_font_size(value);
         }
         if let Some(value) = patch.person_history_count {
             self.person_history_count = value.min(3);
@@ -130,9 +130,28 @@ pub fn load_config() -> AppConfig {
     let Ok(text) = fs::read_to_string(path) else {
         return AppConfig::default();
     };
-    let mut config: AppConfig = serde_json::from_str(&text).unwrap_or_default();
+    parse_config(&text)
+}
+
+fn parse_config(text: &str) -> AppConfig {
+    let mut config: AppConfig = serde_json::from_str(text).unwrap_or_default();
+    config.opacity = normalize_opacity(config.opacity);
+    config.font_size = normalize_font_size(config.font_size);
     config.sanitize_window_geometry();
     config
+}
+
+fn normalize_opacity(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.10, 1.00)
+    } else {
+        AppConfig::default().opacity
+    }
+}
+
+fn normalize_font_size(value: u8) -> u8 {
+    // Snap legacy odd sizes to the nearest reference preset, with ties rounding up.
+    (value.clamp(10, 18) + 1) / 2 * 2
 }
 
 pub fn save_config(config: &AppConfig) -> Result<(), String> {
@@ -169,7 +188,7 @@ fn is_http_connect_api_url(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        save_window_position, save_window_size, should_persist_window_position,
+        parse_config, save_window_position, save_window_size, should_persist_window_position,
         should_persist_window_size, AppConfig, ConfigPatch,
     };
 
@@ -272,12 +291,122 @@ mod tests {
             config.connect_api_url,
             "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect?token=abc"
         );
-        assert_eq!(config.opacity, 0.98);
-        assert_eq!(config.font_size, 12);
+        assert_eq!(config.opacity, 1.0);
+        assert_eq!(config.font_size, 10);
         assert_eq!(config.window_x, Some(11));
         assert_eq!(config.window_height, Some(444));
         assert!(!config.panel_collapsed);
         assert_eq!(config.person_history_count, 3);
+    }
+
+    #[test]
+    fn config_patch_accepts_reference_opacity_range_and_recovers_non_finite_values() {
+        let mut config = AppConfig::default();
+
+        for (value, expected) in [
+            (-1.0, 0.10),
+            (0.0, 0.10),
+            (0.10, 0.10),
+            (0.25, 0.25),
+            (0.82, 0.82),
+            (0.99, 0.99),
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (f64::NAN, 0.82),
+            (f64::INFINITY, 0.82),
+            (f64::NEG_INFINITY, 0.82),
+        ] {
+            config.apply_patch(ConfigPatch {
+                connect_api_url: None,
+                opacity: Some(value),
+                font_size: None,
+                panel_collapsed: None,
+                person_history_count: None,
+            });
+
+            assert_eq!(config.opacity, expected, "opacity input: {value}");
+            assert_eq!(config.font_size, 14);
+        }
+    }
+
+    #[test]
+    fn config_patch_maps_legacy_font_sizes_to_the_five_reference_presets() {
+        let mut config = AppConfig::default();
+
+        for (value, expected) in [
+            (0, 10),
+            (9, 10),
+            (10, 10),
+            (11, 12),
+            (12, 12),
+            (13, 14),
+            (14, 14),
+            (15, 16),
+            (16, 16),
+            (17, 18),
+            (18, 18),
+            (19, 18),
+            (u8::MAX, 18),
+        ] {
+            config.apply_patch(ConfigPatch {
+                connect_api_url: None,
+                opacity: None,
+                font_size: Some(value),
+                panel_collapsed: None,
+                person_history_count: None,
+            });
+
+            assert_eq!(config.font_size, expected, "font size input: {value}");
+            assert_eq!(config.opacity, 0.82);
+        }
+    }
+
+    #[test]
+    fn loaded_config_normalizes_display_values_and_preserves_other_settings() {
+        for (opacity, font_size, expected_opacity, expected_font_size) in [
+            (-0.5, 3, 0.10, 10),
+            (0.10, 10, 0.10, 10),
+            (0.82, 13, 0.82, 14),
+            (1.0, 18, 1.0, 18),
+            (2.0, 255, 1.0, 18),
+        ] {
+            let text = serde_json::json!({
+                "connectApiUrl": "https://example.test/connect",
+                "opacity": opacity,
+                "fontSize": font_size,
+                "personHistoryCount": 2,
+                "windowX": -1200,
+                "windowY": 120,
+                "windowWidth": 420,
+                "windowHeight": 520,
+                "mainCapacity": 2000,
+                "perUserCapacity": 100
+            })
+            .to_string();
+
+            let config = parse_config(&text);
+
+            assert_eq!(config.opacity, expected_opacity);
+            assert_eq!(config.font_size, expected_font_size);
+            assert_eq!(config.connect_api_url, "https://example.test/connect");
+            assert_eq!(config.person_history_count, 2);
+            assert_eq!(config.window_x, Some(-1200));
+            assert_eq!(config.window_y, Some(120));
+            assert_eq!(config.window_width, Some(420));
+            assert_eq!(config.window_height, Some(520));
+            assert_eq!(config.main_capacity, 2000);
+            assert_eq!(config.per_user_capacity, 100);
+        }
+    }
+
+    #[test]
+    fn missing_or_invalid_config_retains_default_display_values() {
+        for text in ["{}", "invalid config"] {
+            let config = parse_config(text);
+
+            assert_eq!(config.opacity, 0.82);
+            assert_eq!(config.font_size, 14);
+        }
     }
 
     #[test]

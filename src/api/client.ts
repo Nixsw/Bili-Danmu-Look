@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { normalizeFontSize, normalizeOpacity } from "../core/displaySettings";
 import { createMessageStore } from "../core/messageStore";
 import type { AppSnapshot, IncomingDanmuRaw } from "../core/types";
 
@@ -91,8 +92,10 @@ function createTauriClient(): DanmuClient {
         unlisten?.();
       };
     },
-    getConfig: () => invoke<DisplayConfig>("get_config"),
-    updateConfig: (config) => invoke<DisplayConfig>("update_config", { patch: config }),
+    getConfig: async () => normalizeDisplayConfig(await invoke<DisplayConfig>("get_config")),
+    updateConfig: async (config) => normalizeDisplayConfig(
+      await invoke<DisplayConfig>("update_config", { patch: normalizeDisplayPatch(config) })
+    ),
     probeBilibiliConnection: () =>
       invoke<ProbeReport>("probe_bilibili_connection"),
     connect: () => invoke<void>("connect_ws"),
@@ -123,7 +126,7 @@ function createBrowserFallbackClient(): DanmuClient {
     personViewportSize: 14,
     personHistoryCount: defaultConfig.personHistoryCount
   });
-  let config = { ...defaultConfig };
+  let config = normalizeDisplayConfig(defaultConfig);
   let socket: WebSocket | null = null;
   let onChange: (snapshot: AppSnapshot) => void = () => undefined;
 
@@ -140,10 +143,10 @@ function createBrowserFallbackClient(): DanmuClient {
       };
     },
     async getConfig() {
-      return config;
+      return normalizeDisplayConfig(config);
     },
     async updateConfig(patch) {
-      config = { ...config, ...patch };
+      config = { ...config, ...normalizeDisplayPatch(patch) };
       if (typeof patch.personHistoryCount === "number") {
         config.personHistoryCount = clampPersonHistoryCount(
           patch.personHistoryCount
@@ -151,7 +154,7 @@ function createBrowserFallbackClient(): DanmuClient {
         store.setPersonHistoryCount(config.personHistoryCount);
         emit();
       }
-      return config;
+      return normalizeDisplayConfig(config);
     },
     async probeBilibiliConnection() {
       return {
@@ -292,4 +295,21 @@ function createBrowserFallbackClient(): DanmuClient {
 
 function clampPersonHistoryCount(value: number) {
   return Math.min(3, Math.max(0, Math.trunc(value)));
+}
+
+function normalizeDisplayConfig(config: DisplayConfig): DisplayConfig {
+  return {
+    ...config,
+    opacity: normalizeOpacity(config.opacity),
+    fontSize: normalizeFontSize(config.fontSize)
+  };
+}
+
+function normalizeDisplayPatch(patch: Partial<DisplayConfig>): Partial<DisplayConfig> {
+  const { opacity, fontSize, ...rest } = patch;
+  return {
+    ...rest,
+    ...(opacity === undefined ? {} : { opacity: normalizeOpacity(opacity) }),
+    ...(fontSize === undefined ? {} : { fontSize: normalizeFontSize(fontSize) })
+  };
 }
