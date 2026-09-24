@@ -3,6 +3,7 @@ mod bilibili;
 mod commands;
 mod models;
 mod store;
+mod window_state;
 mod ws_client;
 
 use app_config::{load_config, save_window_position, save_window_size};
@@ -18,6 +19,9 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{
     Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
+use window_state::{
+    current_window_action, recover_offscreen_window, show_main_window, WindowAction,
 };
 
 const APP_DISPLAY_TITLE: &str = "读弹幕工具 - 小小鱼";
@@ -109,12 +113,14 @@ fn apply_main_window_config(
         .map(|state| state.config.clone())
         .unwrap_or_default();
 
-    if let (Some(width), Some(height)) = (config.window_width, config.window_height) {
-        let _ = window.set_size(PhysicalSize::new(width, height));
-    }
+    // Move to the saved monitor first so its DPI adjustment cannot scale the restored size again.
     if let (Some(x), Some(y)) = (config.window_x, config.window_y) {
         let _ = window.set_position(PhysicalPosition::new(x, y));
     }
+    if let (Some(width), Some(height)) = (config.window_width, config.window_height) {
+        let _ = window.set_size(PhysicalSize::new(width, height));
+    }
+    recover_offscreen_window(&window)?;
     Ok(())
 }
 
@@ -123,24 +129,31 @@ fn persist_main_window_geometry(
     runtime_state: Arc<Mutex<RuntimeState>>,
 ) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("main") {
-        window.on_window_event(move |event| match event {
-            WindowEvent::Moved(position) => {
-                if let Ok(mut state) = runtime_state.lock() {
-                    let config = state.config.clone();
-                    if let Ok(next) = save_window_position(position.x, position.y, config) {
-                        state.config = next;
+        let observed_window = window.clone();
+        window.on_window_event(move |event| {
+            // Windows emits sentinel geometry while minimizing; keep the last normal rectangle.
+            if observed_window.is_minimized().unwrap_or(true) {
+                return;
+            }
+            match event {
+                WindowEvent::Moved(position) => {
+                    if let Ok(mut state) = runtime_state.lock() {
+                        let config = state.config.clone();
+                        if let Ok(next) = save_window_position(position.x, position.y, config) {
+                            state.config = next;
+                        }
                     }
                 }
-            }
-            WindowEvent::Resized(size) => {
-                if let Ok(mut state) = runtime_state.lock() {
-                    let config = state.config.clone();
-                    if let Ok(next) = save_window_size(size.width, size.height, config) {
-                        state.config = next;
+                WindowEvent::Resized(size) => {
+                    if let Ok(mut state) = runtime_state.lock() {
+                        let config = state.config.clone();
+                        if let Ok(next) = save_window_size(size.width, size.height, config) {
+                            state.config = next;
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         });
     }
     Ok(())
@@ -156,7 +169,7 @@ fn tray_menu_item_specs() -> [TrayMenuItemSpec; 3] {
     [
         TrayMenuItemSpec {
             id: "show",
-            label: "显示/隐藏",
+            label: "显示窗口",
         },
         TrayMenuItemSpec {
             id: "settings",
@@ -181,6 +194,22 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     )?;
     let quit = MenuItem::with_id(app, quit_spec.id, quit_spec.label, true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
+    let refresh_label = {
+        let show = show.clone();
+        let app = app.handle().clone();
+        move || {
+            if let Some(window) = app.get_webview_window("main") {
+                let action = current_window_action(&window).unwrap_or(WindowAction::Show);
+                let _ = show.set_text(action.label());
+            }
+        }
+    };
+    refresh_label();
+    if let Some(window) = app.get_webview_window("main") {
+        let refresh_label = refresh_label.clone();
+        window.on_window_event(move |_| refresh_label());
+    }
+    let refresh_after_action = refresh_label.clone();
 
     TrayIconBuilder::new()
         .menu(&menu)
@@ -191,26 +220,33 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         )
         .tooltip(APP_DISPLAY_TITLE)
         .title(APP_DISPLAY_TITLE)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    if window.is_visible().unwrap_or(false) {
-                        let _ = window.hide();
-                    } else {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+        // Refresh on hover / button-down too, before Windows opens the menu on button-up.
+        // This also covers hidden windows and monitor changes that emitted no window event.
+        .on_tray_icon_event(move |_, _| refresh_label())
+        .on_menu_event(move |app, event| {
+            match event.id.as_ref() {
+                "show" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        match current_window_action(&window).unwrap_or(WindowAction::Show) {
+                            WindowAction::Hide => {
+                                let _ = window.hide();
+                            }
+                            WindowAction::Show => {
+                                let _ = show_main_window(&window);
+                            }
+                        }
                     }
                 }
-            }
-            "settings" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    let _ = window.emit("tray_settings_requested", ());
+                "settings" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = show_main_window(&window);
+                        let _ = window.emit("tray_settings_requested", ());
+                    }
                 }
+                "quit" => app.exit(0),
+                _ => {}
             }
-            "quit" => app.exit(0),
-            _ => {}
+            refresh_after_action();
         })
         .build(app)?;
 
@@ -237,9 +273,8 @@ mod tests {
 
     #[test]
     fn main_window_config_disables_native_shadow() {
-        let config: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json"))
-                .expect("tauri config should be valid JSON");
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri config should be valid JSON");
 
         assert_eq!(config["app"]["windows"][0]["shadow"], false);
     }
