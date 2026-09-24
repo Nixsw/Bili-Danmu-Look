@@ -109,9 +109,9 @@ cargo test --manifest-path src-tauri\Cargo.toml live_probe_from_env_writes_repor
 打包后主要产物位于：
 
 - `src-tauri/target/release/danmu-tools.exe`
-- `src-tauri/target/release/bundle/nsis/DanmuTools_1.2.1_x64-setup.exe`
-- `src-tauri/target/release/bundle/msi/DanmuTools_1.2.1_x64_zh-CN.msi`
-- `src-tauri/target/release/bundle/portable/DanmuTools_1.2.1_x64_portable.zip`
+- `src-tauri/target/release/bundle/nsis/DanmuTools_1.3.0_x64-setup.exe`
+- `src-tauri/target/release/bundle/msi/DanmuTools_1.3.0_x64_zh-CN.msi`
+- `src-tauri/target/release/bundle/portable/DanmuTools_1.3.0_x64_portable.zip`
 
 ## 消息 JSON 格式
 

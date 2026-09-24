@@ -1,0 +1,76 @@
+name: Windows x64 Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust for Windows x64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Verify tag, version, and target architecture
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $version."
+          }
+
+          $hostTriple = ((rustc -vV | Select-String '^host: ').Line -split ':', 2)[1].Trim()
+          if ($hostTriple -ne 'x86_64-pc-windows-msvc') {
+            throw "Expected Windows x64 Rust target, got $hostTriple."
+          }
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Windows release packages
+        run: npm run tauri:build
+
+      - name: Build portable package
+        run: npm run package:portable
+
+      - name: Publish GitHub Release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @(
+            "src-tauri/target/release/danmu-tools.exe",
+            "src-tauri/target/release/bundle/nsis/DanmuTools_${version}_x64-setup.exe",
+            "src-tauri/target/release/bundle/msi/DanmuTools_${version}_x64_zh-CN.msi",
+            "src-tauri/target/release/bundle/portable/DanmuTools_${version}_x64_portable.zip"
+          )
+
+          $missing = $assets | Where-Object { -not (Test-Path -LiteralPath $_) }
+          if ($missing) {
+            throw "Build assets missing: $($missing -join ', ')"
+          }
+
+          gh release create $tag @assets `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "DanmuTools $version" `
+            --generate-notes
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }

@@ -1,6 +1,6 @@
 [package]
 name = "danmu-tools"
-version = "1.2.1"
+version = "1.3.0"
 description = "弹幕漏读工具"
 authors = ["小小鱼"]
 edition = "2021"
@@ -16,8 +16,8 @@ tauri-build = { version = "2", features = [] }
 [package.metadata.tauri-winres]
 CompanyName = "小小鱼（QQ：521573）"
 FileDescription = "弹幕漏读工具"
-FileVersion = "1.2.1"
-ProductVersion = "1.2.1"
+FileVersion = "1.3.0"
+ProductVersion = "1.3.0"
 ProductName = "DanmuTools"
 InternalName = "DanmuTools"
 OriginalFilename = "DanmuTools.exe"

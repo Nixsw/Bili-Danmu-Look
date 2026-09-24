@@ -4,6 +4,7 @@ import { rcedit } from "rcedit";
 
 const exePath = resolve("src-tauri/target/release/danmu-tools.exe");
 const iconPath = resolve("src-tauri/icons/icon.ico");
+const { version } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
 const zhCnLangId = Buffer.from([0x04, 0x08, 0xb0, 0x04]);
 
 const utf16le = (value) => Buffer.from(value, "utf16le");
@@ -47,13 +48,13 @@ async function patchVersionLanguage(path) {
 
 await rcedit(exePath, {
   icon: iconPath,
-  "file-version": "1.2.1",
-  "product-version": "1.2.1",
+  "file-version": version,
+  "product-version": version,
   "version-string": {
     CompanyName: "小小鱼（QQ：521573）",
     FileDescription: "弹幕漏读工具",
-    FileVersion: "1.2.1",
-    ProductVersion: "1.2.1",
+    FileVersion: version,
+    ProductVersion: version,
     ProductName: "DanmuTools",
     InternalName: "DanmuTools",
     InternalFilename: "DanmuTools",
