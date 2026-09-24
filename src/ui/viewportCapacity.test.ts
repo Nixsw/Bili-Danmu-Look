@@ -150,4 +150,49 @@ describe("createViewportCapacityTracker", () => {
       rowHeights: [260, 140]
     })).toBe(2);
   });
+
+  test("keeps an overflowing candidate outside the painted range on both panels", () => {
+    for (const gap of [4, 7]) {
+      const measure = createViewportCapacityTracker();
+      measure({ ...layout, gap, containerHeight: 150, rowIds: ["1"], rowHeights: [60] });
+      expect(measure.getVisibleRange()).toEqual({ start: 0, end: 1 });
+      expect(measure({
+        ...layout, gap, containerHeight: 150, rowIds: ["1", "2"], rowHeights: [60, 100]
+      })).toBe(1);
+      expect(measure.getVisibleRange()).toEqual({ start: 0, end: 1 });
+    }
+  });
+
+  test("a failed prepend probe keeps the fitting tail and its anchor visible", () => {
+    const measure = createViewportCapacityTracker();
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["9", "10"], rowHeights: [60, 160]
+    })).toBe(3);
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["8", "9", "10"], rowHeights: [260, 60, 160]
+    })).toBe(2);
+    expect(measure.getVisibleRange()).toEqual({ start: 1, end: 3 });
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["8", "9", "10"], rowHeights: [260, 60, 160]
+    })).toBe(2);
+    expect(measure.getVisibleRange()).toEqual({ start: 1, end: 3 });
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["9", "10"], rowHeights: [60, 160]
+    })).toBe(2);
+    expect(measure.getVisibleRange()).toEqual({ start: 0, end: 2 });
+    // A delayed candidate can be replayed after the corrected snapshot.
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["8", "9", "10"], rowHeights: [260, 60, 160]
+    })).toBe(2);
+    expect(measure.getVisibleRange()).toEqual({ start: 1, end: 3 });
+  });
+
+  test("initial selection paints the anchor while an oversized history slice is corrected", () => {
+    const measure = createViewportCapacityTracker();
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["8", "9", "10"], rowHeights: [60, 160, 160],
+      anchorRowId: "10"
+    })).toBe(1);
+    expect(measure.getVisibleRange()).toEqual({ start: 2, end: 3 });
+  });
 });

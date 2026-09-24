@@ -9,12 +9,20 @@ mod cache_tests;
 #[cfg(test)]
 mod clear_tests;
 
+#[derive(Clone, Copy)]
+struct ViewportResizeOrigin {
+    start_index: usize,
+    pinned_to_bottom: bool,
+}
+
 pub struct MessageStore {
     next_message_id: u64,
     main_capacity: usize,
     per_user_capacity: usize,
     main_viewport_size: usize,
     person_viewport_size: usize,
+    main_resize_origin: Option<ViewportResizeOrigin>,
+    person_resize_origin: Option<ViewportResizeOrigin>,
     person_history_count: usize,
     main_start_index: usize,
     main_top_aligned: bool,
@@ -40,6 +48,8 @@ impl MessageStore {
             per_user_capacity: per_user_capacity.max(1),
             main_viewport_size: 22,
             person_viewport_size: 14,
+            main_resize_origin: None,
+            person_resize_origin: None,
             person_history_count: 1,
             main_start_index: 0,
             main_top_aligned: false,
@@ -59,9 +69,13 @@ impl MessageStore {
     }
 
     pub fn ingest(&mut self, raw: IncomingDanmuRaw) -> Result<DanmuMessage, String> {
-        let keep_main_pinned_to_bottom = self.is_main_viewport_at_bottom();
+        let keep_main_pinned_to_bottom = self
+            .main_resize_origin
+            .map(|origin| origin.pinned_to_bottom)
+            .unwrap_or_else(|| self.is_main_viewport_at_bottom());
         let protected_person_ids = self.protected_person_ids();
         let message = normalize_incoming(raw, self.next_message_id)?;
+        self.reset_resize_origins();
         self.next_message_id += 1;
         self.messages.push_back(message.clone());
         self.by_id.insert(message.message_id, message.clone());
@@ -96,6 +110,7 @@ impl MessageStore {
         }
         let advances_unread =
             self.first_unread().map(|message| message.message_id) == Some(message_id);
+        self.reset_resize_origins();
         if let Some(message) = self.by_id.get_mut(&message_id) {
             message.read = true;
         }
@@ -112,6 +127,7 @@ impl MessageStore {
     }
 
     pub fn ack_user_messages(&mut self, uid: &str) {
+        self.reset_resize_origins();
         let advances_unread = self.first_unread().map(|message| message.uid.as_str()) == Some(uid);
         for message in self.by_id.values_mut() {
             if message.uid == uid {
@@ -147,6 +163,7 @@ impl MessageStore {
         if removed_count == 0 {
             return 0;
         }
+        self.reset_resize_origins();
 
         // Keep the first surviving row at the top, including short trailing pages.
         self.main_start_index = self
@@ -179,6 +196,7 @@ impl MessageStore {
     }
 
     pub fn clear_all_messages(&mut self) -> usize {
+        self.reset_resize_origins();
         let removed_count = self.messages.len();
         self.messages.clear();
         self.by_id.clear();
@@ -201,6 +219,7 @@ impl MessageStore {
         self.anchor_message_id = Some(message_id);
         self.hover_frozen = false;
         self.person_manual_viewport = false;
+        self.person_resize_origin = None;
         // Main history can still contain messages evicted from the smaller UID index.
         let user_ids = self.ids_by_uid.entry(uid.clone()).or_default();
         if !user_ids.contains(&message_id) {
@@ -223,6 +242,7 @@ impl MessageStore {
         if delta == 0 {
             return;
         }
+        self.main_resize_origin = None;
         let normal_max = max_viewport_start(self.messages.len(), self.main_viewport_size);
         // Keep wheel steps continuous when leaving a short, top-aligned tail.
         let max_start = if self.main_top_aligned {
@@ -251,6 +271,7 @@ impl MessageStore {
             return;
         }
         self.person_manual_viewport = true;
+        self.person_resize_origin = None;
         self.person_start_index = scroll_viewport_start(
             self.person_start_index,
             delta,
@@ -260,6 +281,7 @@ impl MessageStore {
     }
 
     pub fn set_person_history_count(&mut self, value: usize) {
+        self.person_resize_origin = None;
         self.person_history_count = value.min(3);
         if !self.person_manual_viewport {
             self.person_start_index = self.compute_anchored_person_start();
@@ -272,12 +294,19 @@ impl MessageStore {
         person_viewport_size: Option<usize>,
     ) {
         if let Some(value) = main_viewport_size {
-            let keep_main_pinned_to_bottom = self.is_main_viewport_at_bottom();
-            self.main_viewport_size = clamp_viewport_size(value);
-            if keep_main_pinned_to_bottom {
-                self.pin_main_viewport_to_bottom();
-            } else {
-                self.clamp_main_viewport_start();
+            if clamp_viewport_size(value) != self.main_viewport_size {
+                let origin = self.main_resize_origin.unwrap_or(ViewportResizeOrigin {
+                    start_index: self.main_start_index,
+                    pinned_to_bottom: self.is_main_viewport_at_bottom(),
+                });
+                self.main_resize_origin = Some(origin);
+                self.main_viewport_size = clamp_viewport_size(value);
+                if origin.pinned_to_bottom {
+                    self.pin_main_viewport_to_bottom();
+                } else {
+                    self.main_start_index = origin.start_index;
+                    self.clamp_main_viewport_start();
+                }
             }
         }
 
@@ -285,13 +314,23 @@ impl MessageStore {
             if clamp_viewport_size(value) == self.person_viewport_size {
                 return;
             }
+            let user_count = self.selected_user_ids().len();
+            let origin = self.person_resize_origin.unwrap_or(ViewportResizeOrigin {
+                start_index: self.person_start_index,
+                pinned_to_bottom: user_count > 0
+                    && self.person_start_index
+                        >= max_viewport_start(user_count, self.person_viewport_size),
+            });
+            self.person_resize_origin = Some(origin);
             self.person_viewport_size = clamp_viewport_size(value);
             if self.person_manual_viewport {
-                self.person_start_index = clamp_viewport_start(
-                    self.person_start_index,
-                    self.selected_user_ids().len(),
-                    self.person_viewport_size,
-                );
+                // Keep the original alignment across probes, even if a candidate
+                // temporarily reaches the tail or prepends older history.
+                self.person_start_index = if origin.pinned_to_bottom {
+                    max_viewport_start(user_count, self.person_viewport_size)
+                } else {
+                    clamp_viewport_start(origin.start_index, user_count, self.person_viewport_size)
+                };
             } else {
                 self.person_start_index = self.compute_anchored_person_start();
             }
@@ -351,11 +390,17 @@ impl MessageStore {
         }
     }
 
+    fn reset_resize_origins(&mut self) {
+        self.main_resize_origin = None;
+        self.person_resize_origin = None;
+    }
+
     fn reset_person_selection(&mut self) {
         self.selected_uid = None;
         self.anchor_message_id = None;
         self.person_start_index = 0;
         self.person_manual_viewport = false;
+        self.person_resize_origin = None;
         self.hover_frozen = false;
     }
 
@@ -494,6 +539,7 @@ impl MessageStore {
     }
 
     fn align_main_to_unread(&mut self, motion: MainViewportMotion) {
+        self.main_resize_origin = None;
         let index = self.messages.iter().position(|message| !message.read);
         let previous_start = self.main_start_index;
         self.main_top_aligned = index.is_some();
@@ -1220,6 +1266,124 @@ mod tests {
         store.ingest(raw("M10", 42, 10)).unwrap();
         assert_eq!(person_contents(&store), ["M5", "M6", "M7", "M8", "M9"]);
         assert_eq!(store.snapshot().person_panel.hidden_newer_count, 1);
+    }
+
+    #[test]
+    fn resize_alignment_restores_original_first_row_after_capacity_probe_reaches_tail() {
+        for capacity in [3, 4, 10] {
+            let mut store = MessageStore::new(1000, 50);
+            store.main_viewport_size = 2;
+            store.person_viewport_size = 2;
+            for i in 1..=10 {
+                store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
+            }
+            store.scroll_main_viewport(7);
+            store.select_user_anchor(10);
+            store.scroll_person_viewport(-1);
+            assert_eq!(main_contents(&store), ["M8", "M9"]);
+            assert_eq!(person_contents(&store), ["M8", "M9"]);
+
+            store.set_viewport_sizes(Some(capacity), Some(capacity));
+            let expected = (11 - capacity..=10)
+                .map(|i| format!("M{i}"))
+                .collect::<Vec<_>>();
+            assert_eq!(main_contents(&store), expected);
+            assert_eq!(person_contents(&store), expected);
+            store.set_viewport_sizes(Some(2), Some(2));
+            assert_eq!(main_contents(&store), ["M8", "M9"]);
+            assert_eq!(person_contents(&store), ["M8", "M9"]);
+            assert_eq!(store.snapshot().main_hidden_newer_count, 1);
+            assert_eq!(store.snapshot().person_panel.hidden_newer_count, 1);
+        }
+    }
+
+    #[test]
+    fn resize_alignment_does_not_follow_new_messages_when_pending_growth_probe_reaches_tail() {
+        let mut store = MessageStore::new(1000, 50);
+        store.main_viewport_size = 2;
+        store.person_viewport_size = 2;
+        for i in 1..=10 {
+            store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
+        }
+        store.scroll_main_viewport(7);
+        store.select_user_anchor(10);
+        store.scroll_person_viewport(-1);
+        store.set_viewport_sizes(Some(3), Some(3));
+        store.ingest(raw("M11", 42, 11)).unwrap();
+        assert_eq!(main_contents(&store), ["M8", "M9", "M10"]);
+        assert_eq!(person_contents(&store), ["M8", "M9", "M10"]);
+        store.set_viewport_sizes(Some(2), Some(2));
+        assert_eq!(main_contents(&store), ["M8", "M9"]);
+        assert_eq!(person_contents(&store), ["M8", "M9"]);
+    }
+
+    #[test]
+    fn resize_alignment_resets_after_manual_navigation_and_new_arrivals() {
+        let mut store = MessageStore::new(1000, 50);
+        store.main_viewport_size = 2;
+        store.person_viewport_size = 2;
+        for i in 1..=10 {
+            store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
+        }
+        store.scroll_main_viewport(7);
+        store.select_user_anchor(10);
+        store.scroll_person_viewport(-1);
+        store.set_viewport_sizes(Some(3), Some(3));
+        store.set_viewport_sizes(Some(2), Some(2));
+        store.scroll_main_viewport(1);
+        store.scroll_person_viewport(1);
+        store.set_viewport_sizes(Some(3), Some(3));
+        store.set_viewport_sizes(Some(2), Some(2));
+        assert_eq!(main_contents(&store), ["M9", "M10"]);
+        assert_eq!(person_contents(&store), ["M9", "M10"]);
+
+        store.ingest(raw("M11", 42, 11)).unwrap();
+        store.set_viewport_sizes(Some(3), Some(3));
+        store.set_viewport_sizes(Some(2), Some(2));
+        assert_eq!(main_contents(&store), ["M10", "M11"]);
+        assert_eq!(person_contents(&store), ["M9", "M10"]);
+        assert_eq!(store.snapshot().person_panel.hidden_newer_count, 1);
+    }
+
+    #[test]
+    fn person_manual_viewport_restores_tail_after_rejected_growth_without_following_new_messages() {
+        let mut store = MessageStore::new(1000, 50);
+        store.person_viewport_size = 2;
+        for i in 1..=10 {
+            store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
+        }
+        store.select_user_anchor(10);
+        store.scroll_person_viewport(1);
+        assert_eq!(person_contents(&store), ["M9", "M10"]);
+
+        store.set_viewport_sizes(None, Some(3));
+        assert_eq!(person_contents(&store), ["M8", "M9", "M10"]);
+        store.set_viewport_sizes(None, Some(2));
+        assert_eq!(person_contents(&store), ["M9", "M10"]);
+        assert_eq!(store.snapshot().person_panel.anchor_message_id, Some(10));
+        assert_eq!(store.snapshot().person_panel.hidden_newer_count, 0);
+
+        store.ingest(raw("M11", 42, 11)).unwrap();
+        assert_eq!(person_contents(&store), ["M9", "M10"]);
+        assert_eq!(store.snapshot().person_panel.hidden_newer_count, 1);
+    }
+
+    #[test]
+    fn person_manual_viewport_keeps_first_history_row_during_capacity_changes_away_from_tail() {
+        let mut store = MessageStore::new(1000, 50);
+        store.person_viewport_size = 2;
+        for i in 1..=10 {
+            store.ingest(raw(&format!("M{i}"), 42, i)).unwrap();
+        }
+        store.select_user_anchor(10);
+        store.scroll_person_viewport(-5);
+        assert_eq!(person_contents(&store), ["M4", "M5"]);
+
+        store.set_viewport_sizes(None, Some(3));
+        assert_eq!(person_contents(&store), ["M4", "M5", "M6"]);
+        store.set_viewport_sizes(None, Some(2));
+        assert_eq!(person_contents(&store), ["M4", "M5"]);
+        assert_eq!(store.snapshot().person_panel.hidden_newer_count, 5);
     }
 
     #[test]

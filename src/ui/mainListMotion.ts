@@ -46,7 +46,8 @@ export function createMainListMotion(getList: () => HTMLElement | null) {
       revision = snapshot.mainViewportRevision;
       targetId = nextId;
       const list = getList();
-      const rows = list ? Array.from(list.children) as HTMLElement[] : [];
+      const rows = list ? Array.from(list.children).filter((row) =>
+        !row.hasAttribute("data-viewport-hidden")) as HTMLElement[] : [];
       const oldFirst = rows[0];
       if (!list || !oldFirst || nextId === undefined ||
           oldFirst.dataset.messageId === String(nextId) ||
@@ -93,13 +94,14 @@ export function createMainListMotion(getList: () => HTMLElement | null) {
       if (!captured) return;
       pending = undefined;
       const list = getList();
-      if (!list || list.firstElementChild?.getAttribute("data-message-id") !== String(captured.targetId)) return;
+      if (!list || list.querySelector(":scope > :not([data-viewport-hidden])")?.getAttribute("data-message-id") !== String(captured.targetId)) return;
       const viewport = list.parentElement!;
       const height = viewport.clientHeight;
       if (!height || document.hidden) return;
       let offset = captured.targetTop;
       if (offset === undefined) {
         const shared = Array.from(list.children).find((row) =>
+          !row.hasAttribute("data-viewport-hidden") &&
           row.getAttribute("data-message-id") === captured.oldFirstId);
         offset = shared
           ? captured.oldFirstTop - (shared.getBoundingClientRect().top - viewport.getBoundingClientRect().top)

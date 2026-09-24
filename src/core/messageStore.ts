@@ -21,6 +21,11 @@ interface ViewportSizePatch {
   personViewportSize?: number;
 }
 
+interface ViewportResizeOrigin {
+  startIndex: number;
+  pinnedToBottom: boolean;
+}
+
 const DEFAULT_MAIN_CAPACITY = 1000;
 const DEFAULT_PER_USER_CAPACITY = 50;
 
@@ -125,6 +130,8 @@ export function createMessageStore(options: MessageStoreOptions) {
   let personManualViewport = false;
   let mainViewportSize = options.mainViewportSize;
   let personViewportSize = options.personViewportSize;
+  let mainResizeOrigin: ViewportResizeOrigin | undefined;
+  let personResizeOrigin: ViewportResizeOrigin | undefined;
   let personHistoryCount = clampPersonHistoryCount(
     options.personHistoryCount ?? 1
   );
@@ -140,9 +147,10 @@ export function createMessageStore(options: MessageStoreOptions) {
 
   const api = {
     ingest(raw: IncomingDanmuRaw) {
-      const keepMainPinnedToBottom = isMainViewportAtBottom();
+      const keepMainPinnedToBottom = mainResizeOrigin?.pinnedToBottom ?? isMainViewportAtBottom();
       const protectedPersonIds = getProtectedPersonIds();
       const message = normalizeIncomingDanmu(raw, nextMessageId);
+      resetResizeOrigins();
       nextMessageId += 1;
       messages.push(message);
       byId.set(message.messageId, message);
@@ -175,6 +183,7 @@ export function createMessageStore(options: MessageStoreOptions) {
       }
 
       const advancesUnread = firstUnread()?.messageId === messageId;
+      resetResizeOrigins();
       message.read = true;
       if (advancesUnread) {
         alignMainToUnread("advance");
@@ -182,6 +191,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     ackUserMessages(uid: string) {
+      resetResizeOrigins();
       const advancesUnread = firstUnread()?.uid === String(uid);
       const userIds = idsByUid.get(String(uid)) ?? [];
       for (const messageId of userIds) {
@@ -214,6 +224,7 @@ export function createMessageStore(options: MessageStoreOptions) {
         removedCount++;
       }
       if (removedCount === 0) return 0;
+      resetResizeOrigins();
 
       // Preserve the first surviving row instead of pulling older rows into view.
       mainStartIndex = Math.min(mainStartIndex, Math.max(0, messages.length - 1));
@@ -232,6 +243,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     clearAllMessages() {
+      resetResizeOrigins();
       const removedCount = messages.length;
       messages.length = 0;
       byId.clear();
@@ -256,6 +268,7 @@ export function createMessageStore(options: MessageStoreOptions) {
       anchorMessageId = message.messageId;
       hoverFrozen = false;
       personManualViewport = false;
+      personResizeOrigin = undefined;
       // The main cache can outlive this user's smaller history index.
       const userIds = idsByUid.get(message.uid) ?? [];
       if (!userIds.includes(messageId)) {
@@ -274,6 +287,7 @@ export function createMessageStore(options: MessageStoreOptions) {
 
     scrollMainViewport(delta: number) {
       if (!Number.isFinite(delta) || delta === 0) return;
+      mainResizeOrigin = undefined;
       const normalMax = maxViewportStart(messages.length, mainViewportSize);
       // A wheel step from a short, top-aligned tail must not jump backwards.
       const maxStart = mainTopAligned ? Math.max(normalMax, mainStartIndex) : normalMax;
@@ -293,6 +307,7 @@ export function createMessageStore(options: MessageStoreOptions) {
         return;
       }
       personManualViewport = true;
+      personResizeOrigin = undefined;
       personStartIndex = scrollViewportStart(
         personStartIndex,
         delta,
@@ -302,6 +317,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     setPersonHistoryCount(value: number) {
+      personResizeOrigin = undefined;
       personHistoryCount = clampPersonHistoryCount(value);
       if (!personManualViewport) {
         personStartIndex = computeAnchoredPersonStart();
@@ -309,25 +325,36 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     setViewportSizes(patch: ViewportSizePatch) {
-      if (typeof patch.mainViewportSize === "number") {
-        const keepMainPinnedToBottom = isMainViewportAtBottom();
+      if (typeof patch.mainViewportSize === "number" &&
+          clampViewportSize(patch.mainViewportSize) !== mainViewportSize) {
+        mainResizeOrigin ??= {
+          startIndex: mainStartIndex,
+          pinnedToBottom: isMainViewportAtBottom()
+        };
         mainViewportSize = clampViewportSize(patch.mainViewportSize);
-        if (keepMainPinnedToBottom) {
+        if (mainResizeOrigin.pinnedToBottom) {
           pinMainViewportToBottom();
         } else {
+          mainStartIndex = mainResizeOrigin.startIndex;
           clampMainViewportStart();
         }
       }
 
       if (typeof patch.personViewportSize === "number" &&
           clampViewportSize(patch.personViewportSize) !== personViewportSize) {
+        const userCount = getSelectedUserIds().length;
+        personResizeOrigin ??= {
+          startIndex: personStartIndex,
+          pinnedToBottom: userCount > 0 &&
+            personStartIndex >= maxViewportStart(userCount, personViewportSize)
+        };
         personViewportSize = clampViewportSize(patch.personViewportSize);
         if (personManualViewport) {
-          personStartIndex = clampViewportStart(
-            personStartIndex,
-            getSelectedUserIds().length,
-            personViewportSize
-          );
+          // Keep the original alignment across probes, even if a candidate
+          // temporarily reaches the tail or prepends older history.
+          personStartIndex = personResizeOrigin.pinnedToBottom
+            ? maxViewportStart(userCount, personViewportSize)
+            : clampViewportStart(personResizeOrigin.startIndex, userCount, personViewportSize);
         } else {
           personStartIndex = computeAnchoredPersonStart();
         }
@@ -386,11 +413,17 @@ export function createMessageStore(options: MessageStoreOptions) {
     }
   };
 
+  function resetResizeOrigins() {
+    mainResizeOrigin = undefined;
+    personResizeOrigin = undefined;
+  }
+
   function resetPersonSelection() {
     selectedUid = null;
     anchorMessageId = null;
     personStartIndex = 0;
     personManualViewport = false;
+    personResizeOrigin = undefined;
     hoverFrozen = false;
   }
 
@@ -499,6 +532,7 @@ export function createMessageStore(options: MessageStoreOptions) {
   }
 
   function alignMainToUnread(motion: NonNullable<AppSnapshot["mainViewportMotion"]>) {
+    mainResizeOrigin = undefined;
     const index = messages.findIndex((message) => !message.read);
     const previousStart = mainStartIndex;
     mainTopAligned = index >= 0;

@@ -33,6 +33,7 @@ import {
   getRetryDeadlineMs
 } from "./ui/connectionStatus";
 import { createViewportCapacityTracker } from "./ui/viewportCapacity";
+import { measureViewportLayout } from "./ui/viewportLayout";
 import { scrollMessageContent } from "./ui/messageScroll";
 import {
   getMessageContextMenuLabels,
@@ -107,6 +108,9 @@ export default function App() {
   const lastPersonViewportSizeRef = useRef<number | null>(null);
   const measureMainCapacity = useMemo(createViewportCapacityTracker, []);
   const measurePersonCapacity = useMemo(createViewportCapacityTracker, []);
+  const personAnchorModeRef = useRef(true);
+  const [mainOverflowCount, setMainOverflowCount] = useState(0);
+  const [personOverflowCount, setPersonOverflowCount] = useState(0);
   const [contentWidth, setContentWidth] = useState(
     MAIN_READABLE_WIDTH + PERSON_PANEL_DEFAULT_WIDTH
   );
@@ -169,10 +173,6 @@ export default function App() {
       disposeTraySettings?.();
     };
   }, [client, mainListMotion]);
-
-  useLayoutEffect(() => {
-    mainListMotion.play();
-  }, [snapshot, mainListMotion]);
 
   useEffect(() => {
     const cancel = () => mainListMotion.cancel();
@@ -285,44 +285,20 @@ export default function App() {
     return () => element.removeEventListener("wheel", scrollMessageContent, true);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = mainListRef.current;
     if (!list) {
       return;
     }
 
-    let frame = 0;
     const syncCapacity = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        const rows = Array.from(
-          list.querySelectorAll<HTMLElement>(".message-card")
-        );
-        if (rows.length === 0) {
-          return;
-        }
-
-        const style = window.getComputedStyle(list);
-        const capacity = measureMainCapacity({
-          containerWidth: list.clientWidth,
-          containerHeight: list.clientHeight,
-          fontSize: config.fontSize,
-          minRowHeight: cssNumber(window.getComputedStyle(rows[0]).minHeight),
-          rowIds: rows.map((row) => row.dataset.messageId!),
-          rowHeights: rows.map((row) => row.getBoundingClientRect().height),
-          gap: cssNumber(style.rowGap),
-          paddingTop: cssNumber(style.paddingTop),
-          paddingBottom: cssNumber(style.paddingBottom),
-          max: 100
-        });
-
-        if (capacity === lastMainViewportSizeRef.current) {
-          return;
-        }
-
-        lastMainViewportSizeRef.current = capacity;
-        void client.setViewportSizes({ mainViewportSize: capacity });
-      });
+      const { capacity, hiddenNewerCount } = measureViewportLayout(
+        list, measureMainCapacity, config.fontSize, 100
+      );
+      setMainOverflowCount(hiddenNewerCount);
+      if (capacity === null || capacity === lastMainViewportSizeRef.current) return;
+      lastMainViewportSizeRef.current = capacity;
+      void client.setViewportSizes({ mainViewportSize: capacity });
     };
 
     syncCapacity();
@@ -330,12 +306,11 @@ export default function App() {
     observer.observe(list);
 
     return () => {
-      window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
   }, [client, config.fontSize, mainMeasurementKey, measureMainCapacity]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!personVisible) {
       return;
     }
@@ -345,38 +320,18 @@ export default function App() {
       return;
     }
 
-    let frame = 0;
     const syncCapacity = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        const rows = Array.from(
-          list.querySelectorAll<HTMLElement>(".person-row")
-        );
-        if (rows.length === 0) {
-          return;
-        }
-
-        const style = window.getComputedStyle(list);
-        const capacity = measurePersonCapacity({
-          containerWidth: list.clientWidth,
-          containerHeight: list.clientHeight,
-          fontSize: config.fontSize,
-          minRowHeight: cssNumber(window.getComputedStyle(rows[0]).minHeight),
-          rowIds: rows.map((row) => row.dataset.messageId!),
-          rowHeights: rows.map((row) => row.getBoundingClientRect().height),
-          gap: cssNumber(style.rowGap),
-          paddingTop: cssNumber(style.paddingTop),
-          paddingBottom: cssNumber(style.paddingBottom),
-          max: 50
-        });
-
-        if (capacity === lastPersonViewportSizeRef.current) {
-          return;
-        }
-
-        lastPersonViewportSizeRef.current = capacity;
-        void client.setViewportSizes({ personViewportSize: capacity });
-      });
+      const { capacity, hiddenNewerCount } = measureViewportLayout(
+        list, measurePersonCapacity, config.fontSize, 50,
+        (personAnchorModeRef.current || (snapshot.personPanel.hiddenNewerCount === 0 &&
+          snapshot.personPanel.visibleMessages.at(-1)?.messageId === snapshot.personPanel.anchorMessageId)) &&
+          snapshot.personPanel.anchorMessageId !== null
+          ? String(snapshot.personPanel.anchorMessageId) : undefined
+      );
+      setPersonOverflowCount(hiddenNewerCount);
+      if (capacity === null || capacity === lastPersonViewportSizeRef.current) return;
+      lastPersonViewportSizeRef.current = capacity;
+      void client.setViewportSizes({ personViewportSize: capacity });
     };
 
     syncCapacity();
@@ -384,7 +339,6 @@ export default function App() {
     observer.observe(list);
 
     return () => {
-      window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
   }, [
@@ -393,8 +347,13 @@ export default function App() {
     measurePersonCapacity,
     personVisible,
     snapshot.personPanel.hiddenNewerCount,
+    snapshot.personPanel.anchorMessageId,
     personMeasurementKey
   ]);
+
+  useLayoutEffect(() => {
+    mainListMotion.play();
+  }, [snapshot, mainListMotion]);
 
   const rootStyle = {
     "--glass-opacity": config.opacity.toString(),
@@ -446,6 +405,7 @@ export default function App() {
     mainListMotion.cancel();
     measureMainCapacity.reset();
     measurePersonCapacity.reset();
+    personAnchorModeRef.current = true;
     try {
       const count = scope === "read"
         ? await client.clearReadMessages()
@@ -461,6 +421,7 @@ export default function App() {
 
   const onMainMessageClick = async (message: DanmuMessage) => {
     setMessageContextMenu(null);
+    personAnchorModeRef.current = true;
     measurePersonCapacity.reset();
     await client.selectUserAnchor(message.messageId);
     await client.ackMainMessage(message.messageId);
@@ -521,6 +482,7 @@ export default function App() {
   const onPersonWheel = (event: React.WheelEvent<HTMLElement>) => {
     const delta = wheelToViewportDelta(event);
     if (delta !== 0) {
+      personAnchorModeRef.current = false;
       measurePersonCapacity.reset();
       void client.scrollPersonViewport(delta);
     }
@@ -593,8 +555,10 @@ export default function App() {
     }
   };
 
-  const mainNewerTip = snapshot.mainHiddenNewerCount > 0 || snapshot.mainCacheNearFull
-    ? `还有 ${snapshot.mainHiddenNewerCount} 条更新${snapshot.mainCacheNearFull ? " - 即将爆满" : ""}`
+  const mainHiddenNewerCount = snapshot.mainHiddenNewerCount + mainOverflowCount;
+  const personHiddenNewerCount = snapshot.personPanel.hiddenNewerCount + personOverflowCount;
+  const mainNewerTip = mainHiddenNewerCount > 0 || snapshot.mainCacheNearFull
+    ? `还有 ${mainHiddenNewerCount} 条更新${snapshot.mainCacheNearFull ? " - 即将爆满" : ""}`
     : "";
 
   return (
@@ -793,11 +757,11 @@ export default function App() {
           </div>
           <div
             className="newer-tip"
-            data-visible={snapshot.personPanel.hiddenNewerCount > 0}
-            aria-hidden={snapshot.personPanel.hiddenNewerCount === 0}
+            data-visible={personHiddenNewerCount > 0}
+            aria-hidden={personHiddenNewerCount === 0}
           >
-            {snapshot.personPanel.hiddenNewerCount > 0
-              ? `还有 ${snapshot.personPanel.hiddenNewerCount} 条更新`
+            {personHiddenNewerCount > 0
+              ? `还有 ${personHiddenNewerCount} 条更新`
               : null}
           </div>
         </aside>
@@ -947,11 +911,6 @@ function SettingsSlider({
 
 function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-function cssNumber(value: string) {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function copyText(text: string) {
