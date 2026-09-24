@@ -122,6 +122,26 @@ pub fn ack_user_messages(
 }
 
 #[tauri::command]
+pub fn clear_read_messages(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    let removed_count = {
+        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+        inner.store.clear_read_messages()
+    };
+    emit_snapshot(&app, &state)?;
+    Ok(removed_count)
+}
+
+#[tauri::command]
+pub fn clear_all_messages(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    let removed_count = {
+        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+        inner.store.clear_all_messages()
+    };
+    emit_snapshot(&app, &state)?;
+    Ok(removed_count)
+}
+
+#[tauri::command]
 pub fn select_user_anchor(
     app: AppHandle,
     state: State<'_, AppState>,

@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const MAIN_DEFAULT_WIDTH: u32 = 420;
-const PERSON_PANEL_WIDTH: u32 = 180;
-const DEFAULT_WINDOW_WIDTH: u32 = MAIN_DEFAULT_WIDTH + PERSON_PANEL_WIDTH;
+const MIN_WINDOW_WIDTH: u32 = 420;
 const MIN_WINDOW_HEIGHT: u32 = 520;
 const WINDOWS_HIDDEN_WINDOW_POSITION: i32 = -30000;
 
@@ -19,6 +17,7 @@ pub struct AppConfig {
     /// Legacy persisted field; always normalized to false because the person panel is permanent.
     pub panel_collapsed: bool,
     pub person_history_count: u8,
+    /// Saved outer position and inner size use physical pixels, matching native window events.
     pub window_x: Option<i32>,
     pub window_y: Option<i32>,
     pub window_width: Option<u32>,
@@ -108,15 +107,17 @@ impl AppConfig {
             self.connect_api_url = default_connect_api_url();
         }
 
-        if let (Some(x), Some(y)) = (self.window_x, self.window_y) {
-            if !should_persist_window_position(x, y) {
+        match (self.window_x, self.window_y) {
+            (Some(x), Some(y)) if should_persist_window_position(x, y) => {}
+            _ => {
                 self.window_x = None;
                 self.window_y = None;
             }
         }
 
-        if let (Some(width), Some(height)) = (self.window_width, self.window_height) {
-            if !should_persist_window_size(width, height) {
+        match (self.window_width, self.window_height) {
+            (Some(width), Some(height)) if should_persist_window_size(width, height) => {}
+            _ => {
                 self.window_width = None;
                 self.window_height = None;
             }
@@ -154,7 +155,7 @@ fn should_persist_window_position(x: i32, y: i32) -> bool {
 }
 
 fn should_persist_window_size(width: u32, height: u32) -> bool {
-    width >= DEFAULT_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT
+    width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT
 }
 
 fn default_connect_api_url() -> String {
@@ -168,7 +169,8 @@ fn is_http_connect_api_url(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        should_persist_window_position, should_persist_window_size, AppConfig, ConfigPatch,
+        save_window_position, save_window_size, should_persist_window_position,
+        should_persist_window_size, AppConfig, ConfigPatch,
     };
 
     #[test]
@@ -186,18 +188,64 @@ mod tests {
     }
 
     #[test]
-    fn discards_narrow_saved_width_when_person_panel_is_visible() {
-        let mut config = AppConfig {
-            panel_collapsed: false,
-            window_width: Some(460),
-            window_height: Some(780),
-            ..AppConfig::default()
-        };
+    fn preserves_resized_windows_down_to_the_supported_minimum() {
+        for (width, height) in [(420, 520), (460, 780), (599, 700), (840, 1040)] {
+            let mut config = AppConfig {
+                window_x: Some(-1200),
+                window_y: Some(120),
+                window_width: Some(width),
+                window_height: Some(height),
+                ..AppConfig::default()
+            };
 
-        config.sanitize_window_geometry();
+            config.sanitize_window_geometry();
 
-        assert_eq!(config.window_width, None);
-        assert_eq!(config.window_height, None);
+            assert_eq!(config.window_x, Some(-1200));
+            assert_eq!(config.window_y, Some(120));
+            assert_eq!(config.window_width, Some(width));
+            assert_eq!(config.window_height, Some(height));
+            assert!(should_persist_window_size(width, height));
+        }
+    }
+
+    #[test]
+    fn discards_sizes_below_the_supported_minimum() {
+        for (width, height) in [(419, 780), (600, 519), (0, 0)] {
+            let mut config = AppConfig {
+                window_width: Some(width),
+                window_height: Some(height),
+                ..AppConfig::default()
+            };
+
+            config.sanitize_window_geometry();
+
+            assert_eq!(config.window_width, None);
+            assert_eq!(config.window_height, None);
+            assert!(!should_persist_window_size(width, height));
+        }
+    }
+
+    #[test]
+    fn discards_incomplete_geometry_pairs() {
+        for (x, y, width, height) in [
+            (Some(120), None, Some(420), None),
+            (None, Some(160), None, Some(520)),
+        ] {
+            let mut config = AppConfig {
+                window_x: x,
+                window_y: y,
+                window_width: width,
+                window_height: height,
+                ..AppConfig::default()
+            };
+
+            config.sanitize_window_geometry();
+
+            assert_eq!(config.window_x, None);
+            assert_eq!(config.window_y, None);
+            assert_eq!(config.window_width, None);
+            assert_eq!(config.window_height, None);
+        }
     }
 
     #[test]
@@ -273,6 +321,25 @@ mod tests {
     fn rejects_windows_hidden_window_geometry() {
         assert!(!should_persist_window_position(-32000, -32000));
         assert!(!should_persist_window_size(144, 19));
+    }
+
+    #[test]
+    fn minimizing_does_not_replace_the_last_normal_window_geometry() {
+        let config = AppConfig {
+            window_x: Some(-1200),
+            window_y: Some(120),
+            window_width: Some(420),
+            window_height: Some(520),
+            ..AppConfig::default()
+        };
+
+        let config = save_window_position(-32000, -32000, config).unwrap();
+        let config = save_window_size(144, 19, config).unwrap();
+
+        assert_eq!(config.window_x, Some(-1200));
+        assert_eq!(config.window_y, Some(120));
+        assert_eq!(config.window_width, Some(420));
+        assert_eq!(config.window_height, Some(520));
     }
 
     #[test]

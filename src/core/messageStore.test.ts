@@ -16,6 +16,35 @@ const baseRaw = (overrides: Partial<IncomingDanmuRaw> = {}): IncomingDanmuRaw =>
   ...overrides
 });
 
+describe("person panel identity", () => {
+  it("keeps the latest nickname and guard identity together while browsing history or switching users", () => {
+    const store = createMessageStore({ mainViewportSize: 6, personViewportSize: 2 });
+    expect(store.getPersonPanel().selectedGuardType).toBeNull();
+    for (let index = 0; index < 5; index++) {
+      store.ingest(baseRaw({ nickname: "旧昵称", guardType: 3 }));
+    }
+    store.selectUserAnchor(1);
+    store.ingest(baseRaw({ nickname: "新昵称", guardType: 2 }));
+
+    const expectLatestIdentity = () => {
+      const panel = store.getPersonPanel();
+      expect(panel.selectedNickname).toBe("新昵称");
+      expect(panel.selectedGuardType).toBe(2);
+    };
+    expectLatestIdentity();
+    expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).not.toContain(6);
+    store.scrollPersonViewport(99);
+    expectLatestIdentity();
+    store.scrollPersonViewport(-99);
+    expectLatestIdentity();
+
+    const other = store.ingest(baseRaw({ uid: 100000002, nickname: "另一位观众", guardType: 0 }));
+    store.selectUserAnchor(other.messageId);
+    expect(store.getPersonPanel().selectedNickname).toBe("另一位观众");
+    expect(store.getPersonPanel().selectedGuardType).toBe(0);
+  });
+});
+
 describe("normalizeIncomingDanmu", () => {
   it("normalizes uid and millisecond timestamps", () => {
     const msg = normalizeIncomingDanmu(baseRaw({ uid: "9007199254740993" }), 7);
@@ -305,6 +334,36 @@ describe("main message viewport", () => {
     ]);
   });
 
+  it("exposes the global unread marker across scrolling, batch reads and cache trimming", () => {
+    const store = createMessageStore({
+      mainCapacity: 4,
+      mainViewportSize: 2,
+      personViewportSize: 5
+    });
+    expect(store.getSnapshot().firstUnreadMessageId).toBeNull();
+    store.ingest(baseRaw({ content: "A", uid: 1 }));
+    store.ingest(baseRaw({ content: "B", uid: 2 }));
+    store.ingest(baseRaw({ content: "C", uid: 1 }));
+    store.scrollMainViewport(1);
+    expect(store.getMainVisible().map((msg) => msg.messageId)).toEqual([2, 3]);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(1);
+    store.ackMainMessage(2);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(1);
+    store.ackUserMessages("1");
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(2);
+    store.ingest(baseRaw({ content: "D", uid: 3 }));
+    store.ingest(baseRaw({ content: "E", uid: 3 }));
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(2);
+    store.ackMainMessage(2);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(4);
+    store.ackMessage(4);
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(5);
+    store.ackMainMessage(5);
+    expect(store.getSnapshot().firstUnreadMessageId).toBeNull();
+    store.ingest(baseRaw({ content: "F", uid: 3 }));
+    expect(store.getSnapshot().firstUnreadMessageId).toBe(6);
+  });
+
   it("rejects later right-side clicks even if the earliest unread is outside the viewport", () => {
     const store = createMessageStore({ mainViewportSize: 3, personViewportSize: 5 });
     "ABCDEFG".split("").forEach((content) => store.ingest(baseRaw({ content })));
@@ -465,6 +524,69 @@ describe("main message viewport", () => {
   });
 });
 
+describe("viewport resize alignment", () => {
+  it.each([3, 4, 10])("restores the original first row after a capacity %i probe reaches the tail", (capacity) => {
+    const store = createMessageStore({ mainViewportSize: 2, personViewportSize: 2 });
+    for (let i = 1; i <= 10; i++) store.ingest(baseRaw({ content: `M${i}`, uid: 42 }));
+    store.scrollMainViewport(7);
+    store.selectUserAnchor(10);
+    store.scrollPersonViewport(-1);
+    const expectBoth = (ids: number[]) => {
+      expect(store.getMainVisible().map(message => message.messageId)).toEqual(ids);
+      expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).toEqual(ids);
+    };
+    expectBoth([8, 9]);
+
+    store.setViewportSizes({ mainViewportSize: capacity, personViewportSize: capacity });
+    expectBoth(Array.from({ length: capacity }, (_, index) => 11 - capacity + index));
+    store.setViewportSizes({ mainViewportSize: 2, personViewportSize: 2 });
+    expectBoth([8, 9]);
+    expect(store.getSnapshot().mainHiddenNewerCount).toBe(1);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(1);
+  });
+
+  it("does not start following new messages when a pending growth probe reaches the tail", () => {
+    const store = createMessageStore({ mainViewportSize: 2, personViewportSize: 2 });
+    for (let i = 1; i <= 10; i++) store.ingest(baseRaw({ content: `M${i}`, uid: 42 }));
+    store.scrollMainViewport(7);
+    store.selectUserAnchor(10);
+    store.scrollPersonViewport(-1);
+    store.setViewportSizes({ mainViewportSize: 3, personViewportSize: 3 });
+    store.ingest(baseRaw({ content: "M11", uid: 42 }));
+    expect(store.getMainVisible().map(message => message.messageId)).toEqual([8, 9, 10]);
+    expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).toEqual([8, 9, 10]);
+    store.setViewportSizes({ mainViewportSize: 2, personViewportSize: 2 });
+    expect(store.getMainVisible().map(message => message.messageId)).toEqual([8, 9]);
+    expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).toEqual([8, 9]);
+  });
+
+  it("resets resize alignment after manual navigation and new arrivals", () => {
+    const store = createMessageStore({ mainViewportSize: 2, personViewportSize: 2 });
+    for (let i = 1; i <= 10; i++) store.ingest(baseRaw({ content: `M${i}`, uid: 42 }));
+    store.scrollMainViewport(7);
+    store.selectUserAnchor(10);
+    store.scrollPersonViewport(-1);
+    const resize = (capacity: number) => store.setViewportSizes({
+      mainViewportSize: capacity, personViewportSize: capacity
+    });
+    resize(3);
+    resize(2);
+    store.scrollMainViewport(1);
+    store.scrollPersonViewport(1);
+    resize(3);
+    resize(2);
+    expect(store.getMainVisible().map(message => message.messageId)).toEqual([9, 10]);
+    expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).toEqual([9, 10]);
+
+    store.ingest(baseRaw({ content: "M11", uid: 42 }));
+    resize(3);
+    resize(2);
+    expect(store.getMainVisible().map(message => message.messageId)).toEqual([10, 11]);
+    expect(store.getPersonPanel().visibleMessages.map(message => message.messageId)).toEqual([9, 10]);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(1);
+  });
+});
+
 describe("person panel anchored viewport", () => {
   it("keeps the anchor at the bottom when there are no newer messages", () => {
     const store = createMessageStore({ mainViewportSize: 8, personViewportSize: 5 });
@@ -593,7 +715,7 @@ describe("person panel anchored viewport", () => {
     ]);
   });
 
-  it("keeps the anchor on the second row instead of bouncing through the first row", () => {
+  it("keeps the anchor on its current row when newer messages arrive", () => {
     const store = createMessageStore({ mainViewportSize: 8, personViewportSize: 5 });
     for (let i = 1; i <= 5; i += 1) {
       store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
@@ -602,25 +724,25 @@ describe("person panel anchored viewport", () => {
     store.selectUserAnchor(3);
     store.ingest(baseRaw({ content: "M6", uid: 42, timestampMs: 6 }));
     expect(store.getPersonPanel().visibleMessages.map((msg) => msg.content)).toEqual([
+      "M1",
       "M2",
       "M3",
       "M4",
-      "M5",
-      "M6"
+      "M5"
     ]);
 
     store.ingest(baseRaw({ content: "M7", uid: 42, timestampMs: 7 }));
 
     const panel = store.getPersonPanel();
     expect(panel.visibleMessages.map((msg) => msg.content)).toEqual([
+      "M1",
       "M2",
       "M3",
       "M4",
-      "M5",
-      "M6"
+      "M5"
     ]);
-    expect(panel.visibleMessages.findIndex((msg) => msg.messageId === panel.anchorMessageId)).toBe(1);
-    expect(panel.hiddenNewerCount).toBe(1);
+    expect(panel.visibleMessages.findIndex((msg) => msg.messageId === panel.anchorMessageId)).toBe(2);
+    expect(panel.hiddenNewerCount).toBe(2);
   });
 
   it("preserves the selected anchor when trimming the per-user message cache", () => {
@@ -651,30 +773,28 @@ describe("person panel anchored viewport", () => {
 
   it("preserves the selected anchor when trimming the main message cache", () => {
     const store = createMessageStore({
-      mainCapacity: 5,
-      perUserCapacity: 10,
+      mainCapacity: 10,
+      perUserCapacity: 20,
       mainViewportSize: 5,
-      personViewportSize: 5
+      personViewportSize: 3
     });
     for (let i = 1; i <= 5; i += 1) {
       store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
     }
 
     store.selectUserAnchor(3);
-    for (let i = 6; i <= 8; i += 1) {
+    for (let i = 6; i <= 12; i += 1) {
       store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
     }
 
     const panel = store.getPersonPanel();
     expect(panel.visibleMessages.some((msg) => msg.messageId === panel.anchorMessageId)).toBe(true);
     expect(panel.visibleMessages.map((msg) => msg.content)).toEqual([
+      "M2",
       "M3",
-      "M4",
-      "M5",
-      "M6",
-      "M7"
+      "M4"
     ]);
-    expect(panel.hiddenNewerCount).toBe(1);
+    expect(panel.hiddenNewerCount).toBe(6);
   });
 
   it("allows the anchor on the first row when no earlier history exists", () => {
@@ -717,13 +837,13 @@ describe("person panel anchored viewport", () => {
     store.setPersonPanelHover(false);
 
     expect(store.getPersonPanel().visibleMessages.map((msg) => msg.content)).toEqual([
+      "M1",
       "M2",
       "M3",
       "M4",
-      "M5",
-      "M6"
+      "M5"
     ]);
-    expect(store.getPersonPanel().hiddenNewerCount).toBe(0);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(1);
   });
 
   it("scrolls selected person history and newer messages while keeping newer count accurate", () => {
@@ -773,6 +893,45 @@ describe("person panel anchored viewport", () => {
       "M9"
     ]);
     expect(store.getPersonPanel().hiddenNewerCount).toBe(1);
+  });
+
+  it("restores the manual person tail after a rejected capacity growth without following new messages", () => {
+    const store = createMessageStore({ mainViewportSize: 8, personViewportSize: 2 });
+    for (let i = 1; i <= 10; i++) {
+      store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
+    }
+    const visibleIds = () => store.getPersonPanel().visibleMessages.map((message) => message.messageId);
+    store.selectUserAnchor(10);
+    store.scrollPersonViewport(1);
+    expect(visibleIds()).toEqual([9, 10]);
+
+    store.setViewportSizes({ personViewportSize: 3 });
+    expect(visibleIds()).toEqual([8, 9, 10]);
+    store.setViewportSizes({ personViewportSize: 2 });
+    expect(visibleIds()).toEqual([9, 10]);
+    expect(store.getPersonPanel().anchorMessageId).toBe(10);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(0);
+
+    store.ingest(baseRaw({ content: "M11", uid: 42, timestampMs: 11 }));
+    expect(visibleIds()).toEqual([9, 10]);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(1);
+  });
+
+  it("keeps the first manual person history row during capacity changes away from the tail", () => {
+    const store = createMessageStore({ mainViewportSize: 8, personViewportSize: 2 });
+    for (let i = 1; i <= 10; i++) {
+      store.ingest(baseRaw({ content: `M${i}`, uid: 42, timestampMs: i }));
+    }
+    const visibleIds = () => store.getPersonPanel().visibleMessages.map((message) => message.messageId);
+    store.selectUserAnchor(10);
+    store.scrollPersonViewport(-5);
+    expect(visibleIds()).toEqual([4, 5]);
+
+    store.setViewportSizes({ personViewportSize: 3 });
+    expect(visibleIds()).toEqual([4, 5, 6]);
+    store.setViewportSizes({ personViewportSize: 2 });
+    expect(visibleIds()).toEqual([4, 5]);
+    expect(store.getPersonPanel().hiddenNewerCount).toBe(5);
   });
 
   it("updates the selected person viewport size to fill a taller panel", () => {

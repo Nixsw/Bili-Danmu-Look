@@ -32,16 +32,15 @@ import {
   getConnectedToastDeadlineMs,
   getRetryDeadlineMs
 } from "./ui/connectionStatus";
-import {
-  estimateViewportCapacity,
-  shouldDistributeViewportSlack
-} from "./ui/viewportCapacity";
+import { createViewportCapacityTracker } from "./ui/viewportCapacity";
+import { measureViewportLayout } from "./ui/viewportLayout";
+import { scrollMessageContent } from "./ui/messageScroll";
 import {
   getMessageContextMenuLabels,
   shouldSuppressNativeContextMenu,
   type MessageContextMenuScope
 } from "./ui/contextMenu";
-import { createConnectApiUrlPatch } from "./ui/settingsPanel";
+import { applyConnectApiUrl, getMessageSizeLabel } from "./ui/settingsPanel";
 import { createMainListMotion } from "./ui/mainListMotion";
 import "./styles.css";
 
@@ -49,12 +48,15 @@ const initialSnapshot: AppSnapshot = {
   connected: false,
   connectionStatus: "启动中",
   mainVisible: [],
+  firstUnreadMessageId: null,
   mainHiddenNewerCount: 0,
+  mainCacheNearFull: false,
   mainViewportRevision: 0,
   mainViewportMotion: null,
   personPanel: {
     selectedUid: null,
     selectedNickname: null,
+    selectedGuardType: null,
     anchorMessageId: null,
     hoverFrozen: false,
     visibleMessages: [],
@@ -82,11 +84,21 @@ export default function App() {
     "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect"
   );
   const [connectApiSaveStatus, setConnectApiSaveStatus] = useState("");
+  const [connectApiSubmitting, setConnectApiSubmitting] = useState(false);
+  const [clearingMessages, setClearingMessages] = useState(false);
+  const [clearMessagesStatus, setClearMessagesStatus] = useState("");
   const [statusNowMs, setStatusNowMs] = useState(() => Date.now());
-  const [retryDeadlineMs, setRetryDeadlineMs] = useState<number | null>(null);
-  const [connectedToastDeadlineMs, setConnectedToastDeadlineMs] = useState<
-    number | null
-  >(null);
+  // A new status and its clock must render together, without borrowing the
+  // previous retry's expired deadline for the first frame.
+  const statusTiming = useMemo(() => {
+    const startedAtMs = Date.now();
+    return {
+      startedAtMs,
+      retryDeadlineMs: getRetryDeadlineMs(snapshot.connectionStatus, startedAtMs),
+      connectedToastDeadlineMs: getConnectedToastDeadlineMs(snapshot.connectionStatus, startedAtMs)
+    };
+  }, [snapshot.connectionStatus]);
+  const { retryDeadlineMs, connectedToastDeadlineMs } = statusTiming;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const contentGridRef = useRef<HTMLElement>(null);
   const mainListRef = useRef<HTMLDivElement>(null);
@@ -94,6 +106,11 @@ export default function App() {
   const personListRef = useRef<HTMLDivElement>(null);
   const lastMainViewportSizeRef = useRef<number | null>(null);
   const lastPersonViewportSizeRef = useRef<number | null>(null);
+  const measureMainCapacity = useMemo(createViewportCapacityTracker, []);
+  const measurePersonCapacity = useMemo(createViewportCapacityTracker, []);
+  const personAnchorModeRef = useRef(true);
+  const [mainOverflowCount, setMainOverflowCount] = useState(0);
+  const [personOverflowCount, setPersonOverflowCount] = useState(0);
   const [contentWidth, setContentWidth] = useState(
     MAIN_READABLE_WIDTH + PERSON_PANEL_DEFAULT_WIDTH
   );
@@ -157,10 +174,6 @@ export default function App() {
     };
   }, [client, mainListMotion]);
 
-  useLayoutEffect(() => {
-    mainListMotion.play();
-  }, [snapshot, mainListMotion]);
-
   useEffect(() => {
     const cancel = () => mainListMotion.cancel();
     window.addEventListener("resize", cancel);
@@ -194,15 +207,6 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [messageContextMenu]);
-
-  useEffect(() => {
-    const nowMs = Date.now();
-    setStatusNowMs(nowMs);
-    setRetryDeadlineMs(getRetryDeadlineMs(snapshot.connectionStatus, nowMs));
-    setConnectedToastDeadlineMs(
-      getConnectedToastDeadlineMs(snapshot.connectionStatus, nowMs)
-    );
-  }, [snapshot.connectionStatus]);
 
   useEffect(() => {
     setConnectApiUrlDraft(config.connectApiUrl);
@@ -275,39 +279,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const element = contentGridRef.current;
+    if (!element) return;
+    element.addEventListener("wheel", scrollMessageContent, { capture: true, passive: false });
+    return () => element.removeEventListener("wheel", scrollMessageContent, true);
+  }, []);
+
+  useLayoutEffect(() => {
     const list = mainListRef.current;
     if (!list) {
       return;
     }
 
-    let frame = 0;
     const syncCapacity = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        const rows = Array.from(
-          list.querySelectorAll<HTMLElement>(".message-card")
-        );
-        if (rows.length === 0) {
-          return;
-        }
-
-        const style = window.getComputedStyle(list);
-        const capacity = estimateViewportCapacity({
-          containerHeight: list.clientHeight,
-          rowHeights: rows.map((row) => row.getBoundingClientRect().height),
-          gap: cssNumber(style.rowGap),
-          paddingTop: cssNumber(style.paddingTop),
-          paddingBottom: cssNumber(style.paddingBottom),
-          max: 100
-        });
-
-        if (capacity === lastMainViewportSizeRef.current) {
-          return;
-        }
-
-        lastMainViewportSizeRef.current = capacity;
-        void client.setViewportSizes({ mainViewportSize: capacity });
-      });
+      const { capacity, hiddenNewerCount } = measureViewportLayout(
+        list, measureMainCapacity, config.fontSize, 100
+      );
+      setMainOverflowCount(hiddenNewerCount);
+      if (capacity === null || capacity === lastMainViewportSizeRef.current) return;
+      lastMainViewportSizeRef.current = capacity;
+      void client.setViewportSizes({ mainViewportSize: capacity });
     };
 
     syncCapacity();
@@ -315,12 +306,11 @@ export default function App() {
     observer.observe(list);
 
     return () => {
-      window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [client, config.fontSize, mainMeasurementKey]);
+  }, [client, config.fontSize, mainMeasurementKey, measureMainCapacity]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!personVisible) {
       return;
     }
@@ -330,34 +320,18 @@ export default function App() {
       return;
     }
 
-    let frame = 0;
     const syncCapacity = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        const rows = Array.from(
-          list.querySelectorAll<HTMLElement>(".person-row")
-        );
-        if (rows.length === 0) {
-          return;
-        }
-
-        const style = window.getComputedStyle(list);
-        const capacity = estimateViewportCapacity({
-          containerHeight: list.clientHeight,
-          rowHeights: rows.map((row) => row.getBoundingClientRect().height),
-          gap: cssNumber(style.rowGap),
-          paddingTop: cssNumber(style.paddingTop),
-          paddingBottom: cssNumber(style.paddingBottom),
-          max: 50
-        });
-
-        if (capacity === lastPersonViewportSizeRef.current) {
-          return;
-        }
-
-        lastPersonViewportSizeRef.current = capacity;
-        void client.setViewportSizes({ personViewportSize: capacity });
-      });
+      const { capacity, hiddenNewerCount } = measureViewportLayout(
+        list, measurePersonCapacity, config.fontSize, 50,
+        (personAnchorModeRef.current || (snapshot.personPanel.hiddenNewerCount === 0 &&
+          snapshot.personPanel.visibleMessages.at(-1)?.messageId === snapshot.personPanel.anchorMessageId)) &&
+          snapshot.personPanel.anchorMessageId !== null
+          ? String(snapshot.personPanel.anchorMessageId) : undefined
+      );
+      setPersonOverflowCount(hiddenNewerCount);
+      if (capacity === null || capacity === lastPersonViewportSizeRef.current) return;
+      lastPersonViewportSizeRef.current = capacity;
+      void client.setViewportSizes({ personViewportSize: capacity });
     };
 
     syncCapacity();
@@ -365,16 +339,21 @@ export default function App() {
     observer.observe(list);
 
     return () => {
-      window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
   }, [
     client,
     config.fontSize,
+    measurePersonCapacity,
     personVisible,
     snapshot.personPanel.hiddenNewerCount,
+    snapshot.personPanel.anchorMessageId,
     personMeasurementKey
   ]);
+
+  useLayoutEffect(() => {
+    mainListMotion.play();
+  }, [snapshot, mainListMotion]);
 
   const rootStyle = {
     "--glass-opacity": config.opacity.toString(),
@@ -382,44 +361,68 @@ export default function App() {
     "--person-panel-width": `${splitLayout.personWidth}px`,
     "--main-panel-width": `${splitLayout.mainWidth}px`
   } as React.CSSProperties;
-  const mainListFilled = shouldDistributeViewportSlack(
-    snapshot.mainVisible.length,
-    lastMainViewportSizeRef.current
-  );
-  const personListFilled = shouldDistributeViewportSlack(
-    snapshot.personPanel.visibleMessages.length,
-    lastPersonViewportSizeRef.current
-  );
   const connectionStatusText = formatTransientConnectionStatus(
     snapshot.connectionStatus,
     retryDeadlineMs,
     connectedToastDeadlineMs,
-    statusNowMs
+    Math.max(statusNowMs, statusTiming.startedAtMs)
   );
   const mainUnreadAnchorAction = getMainUnreadAnchorAction();
   const windowDismissAction = getWindowDismissAction();
+  const backgroundTransparency = Math.round((1 - config.opacity) * 100);
 
   const updateConfig = async (patch: Partial<DisplayConfig>) => {
+    if (patch.personHistoryCount !== undefined) measurePersonCapacity.reset();
     const next = await client.updateConfig(patch);
     setConfig(next);
     return next;
   };
 
   const saveConnectApiUrl = async () => {
-    setConnectApiSaveStatus("保存中");
+    if (connectApiSubmitting) return;
+    setConnectApiSubmitting(true);
+    setConnectApiSaveStatus("正在应用接口地址");
     try {
-      const next = await updateConfig(
-        createConnectApiUrlPatch(connectApiUrlDraft)
-      );
+      const next = await applyConnectApiUrl(connectApiUrlDraft, {
+        updateConfig,
+        reconnect: () => client.reconnect()
+      });
       setConnectApiUrlDraft(next.connectApiUrl);
-      setConnectApiSaveStatus("已保存");
+      setConnectApiSaveStatus("已保存，已发起对接");
     } catch (error) {
-      setConnectApiSaveStatus(`保存失败：${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      setConnectApiSaveStatus(`对接失败：${message}`);
+    } finally {
+      setConnectApiSubmitting(false);
+    }
+  };
+
+  const clearMessages = async (scope: "read" | "all") => {
+    if (clearingMessages) return;
+    setClearingMessages(true);
+    setClearMessagesStatus("正在清除消息");
+    setMessageContextMenu(null);
+    mainListMotion.cancel();
+    measureMainCapacity.reset();
+    measurePersonCapacity.reset();
+    personAnchorModeRef.current = true;
+    try {
+      const count = scope === "read"
+        ? await client.clearReadMessages()
+        : await client.clearAllMessages();
+      setClearMessagesStatus(`已清除 ${count} 条${scope === "read" ? "已读" : ""}消息`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setClearMessagesStatus(`清除失败：${message}`);
+    } finally {
+      setClearingMessages(false);
     }
   };
 
   const onMainMessageClick = async (message: DanmuMessage) => {
     setMessageContextMenu(null);
+    personAnchorModeRef.current = true;
+    measurePersonCapacity.reset();
     await client.selectUserAnchor(message.messageId);
     await client.ackMainMessage(message.messageId);
   };
@@ -466,6 +469,7 @@ export default function App() {
     mainListMotion.cancel();
     const delta = wheelToViewportDelta(event);
     if (delta !== 0) {
+      measureMainCapacity.reset();
       void client.scrollMainViewport(delta);
     }
   };
@@ -478,6 +482,8 @@ export default function App() {
   const onPersonWheel = (event: React.WheelEvent<HTMLElement>) => {
     const delta = wheelToViewportDelta(event);
     if (delta !== 0) {
+      personAnchorModeRef.current = false;
+      measurePersonCapacity.reset();
       void client.scrollPersonViewport(delta);
     }
   };
@@ -549,6 +555,12 @@ export default function App() {
     }
   };
 
+  const mainHiddenNewerCount = snapshot.mainHiddenNewerCount + mainOverflowCount;
+  const personHiddenNewerCount = snapshot.personPanel.hiddenNewerCount + personOverflowCount;
+  const mainNewerTip = mainHiddenNewerCount > 0 || snapshot.mainCacheNearFull
+    ? `还有 ${mainHiddenNewerCount} 条更新${snapshot.mainCacheNearFull ? " - 即将爆满" : ""}`
+    : "";
+
   return (
     <main
       className="app-shell"
@@ -561,6 +573,14 @@ export default function App() {
       >
         <div className="drag-title">
           <span>看弹幕工具</span>
+          <button
+            className="icon-button settings-button"
+            title="设置"
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen((value) => !value)}
+          >
+            <Settings size={15} />
+          </button>
           <span className="status-dot" data-state={snapshot.connected ? "on" : "off"} />
           {connectionStatusText ? (
             <span className="connection-status-text" title={snapshot.connectionStatus}>
@@ -580,13 +600,6 @@ export default function App() {
           </button>
           <button
             className="icon-button"
-            title="设置"
-            onClick={() => setSettingsOpen((value) => !value)}
-          >
-            <Settings size={15} />
-          </button>
-          <button
-            className="icon-button"
             title={windowDismissAction.title}
             onClick={() => getCurrentWindow().minimize().catch(() => undefined)}
           >
@@ -597,61 +610,83 @@ export default function App() {
 
       {settingsOpen && (
         <section className="settings-popover">
-          <label>
-            <span>连接接口</span>
-            <input
-              value={connectApiUrlDraft}
-              onChange={(event) => {
-                setConnectApiUrlDraft(event.target.value);
-                setConnectApiSaveStatus("");
-              }}
-            />
-          </label>
-          <div className="settings-actions">
-            <span>{connectApiSaveStatus}</span>
-            <button type="button" onClick={saveConnectApiUrl}>
-              保存接口
-            </button>
+          <div className="settings-connection">
+            <label htmlFor="connect-api-url">接口地址</label>
+            <div className="settings-connection-row">
+              <input
+                id="connect-api-url"
+                type="text"
+                spellCheck={false}
+                disabled={connectApiSubmitting}
+                value={connectApiUrlDraft}
+                onChange={(event) => {
+                  setConnectApiUrlDraft(event.target.value);
+                  setConnectApiSaveStatus("");
+                }}
+              />
+              <button
+                type="button"
+                className="connect-button"
+                disabled={connectApiSubmitting}
+                onClick={saveConnectApiUrl}
+              >
+                对接
+              </button>
+            </div>
+            {connectApiSaveStatus && (
+              <p className="settings-status" role="status">{connectApiSaveStatus}</p>
+            )}
           </div>
-          <label>
-            <span>透明度</span>
-            <input
-              type="range"
-              min="0.45"
-              max="0.98"
-              step="0.01"
-              value={config.opacity}
-              onChange={(event) =>
-                updateConfig({ opacity: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>字号</span>
-            <input
-              type="range"
-              min="12"
-              max="18"
-              step="1"
-              value={config.fontSize}
-              onChange={(event) =>
-                updateConfig({ fontSize: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>左侧历史条数 {config.personHistoryCount}</span>
-            <input
-              type="range"
-              min="0"
-              max="3"
-              step="1"
-              value={config.personHistoryCount}
-              onChange={(event) =>
-                updateConfig({ personHistoryCount: Number(event.target.value) })
-              }
-            />
-          </label>
+          <SettingsSlider
+            id="background-transparency"
+            label="背景透明度"
+            min={2}
+            max={55}
+            value={backgroundTransparency}
+            valueLabel={`${backgroundTransparency}%`}
+            onChange={(value) => updateConfig({ opacity: (100 - value) / 100 })}
+          />
+          <SettingsSlider
+            id="message-size"
+            label="消息显示大小"
+            min={12}
+            max={18}
+            value={config.fontSize}
+            valueLabel={`${getMessageSizeLabel(config.fontSize)} · ${config.fontSize}`}
+            onChange={(value) => updateConfig({ fontSize: value })}
+          />
+          <SettingsSlider
+            id="person-history-count"
+            label="左侧默认展示历史条数"
+            min={0}
+            max={3}
+            value={config.personHistoryCount}
+            valueLabel={`${config.personHistoryCount} 条`}
+            onChange={(value) => updateConfig({ personHistoryCount: value })}
+          />
+          <div className="settings-clear-section">
+            <div className="settings-clear-actions">
+              <button
+                type="button"
+                className="clear-messages-button"
+                disabled={clearingMessages}
+                onClick={() => clearMessages("read")}
+              >
+                清除已读消息
+              </button>
+              <button
+                type="button"
+                className="clear-messages-button"
+                disabled={clearingMessages}
+                onClick={() => clearMessages("all")}
+              >
+                清除全部消息
+              </button>
+            </div>
+            {clearMessagesStatus && (
+              <p className="settings-status" role="status">{clearMessagesStatus}</p>
+            )}
+          </div>
         </section>
       )}
 
@@ -667,16 +702,23 @@ export default function App() {
         >
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">
-                {snapshot.personPanel.selectedUid
-                  ? `UID ${snapshot.personPanel.selectedUid}`
-                  : "UID"}
+              <span className="panel-kicker" title={snapshot.personPanel.selectedUid ?? undefined}>
+                {snapshot.personPanel.selectedUid}
               </span>
-              <strong>{snapshot.personPanel.selectedNickname ?? "未选择"}</strong>
+              <strong
+                title={snapshot.personPanel.selectedNickname ?? undefined}
+                style={{
+                  color: snapshot.personPanel.selectedGuardType === null
+                    ? undefined
+                    : getGuardNicknameColor(snapshot.personPanel.selectedGuardType)
+                }}
+              >
+                {snapshot.personPanel.selectedNickname}
+              </strong>
             </div>
           </div>
           <div
-            className={`person-list ${personListFilled ? "is-filled" : ""}`}
+            className="person-list"
             ref={personListRef}
           >
             {snapshot.personPanel.visibleMessages.map((message) => (
@@ -689,11 +731,20 @@ export default function App() {
                   message.messageType === "superChat" ? "is-super-chat" : ""
                 }`}
                 key={message.messageId}
+                data-message-id={message.messageId}
                 onClick={() => onPersonMessageClick(message)}
                 onContextMenu={(event) =>
                   openMessageContextMenu(event, message, "person")
                 }
               >
+                {snapshot.personPanel.anchorMessageId === message.messageId && (
+                  <span
+                    className="message-marker person-anchor-marker"
+                    role="img"
+                    aria-label="当前选中消息"
+                    title="当前选中消息"
+                  />
+                )}
                 <span className="time">{formatMmSs(message.timestampMs)}</span>
                 <span className="person-content">
                   {message.messageType === "superChat" && (
@@ -706,11 +757,11 @@ export default function App() {
           </div>
           <div
             className="newer-tip"
-            data-visible={snapshot.personPanel.hiddenNewerCount > 0}
-            aria-hidden={snapshot.personPanel.hiddenNewerCount === 0}
+            data-visible={personHiddenNewerCount > 0}
+            aria-hidden={personHiddenNewerCount === 0}
           >
-            {snapshot.personPanel.hiddenNewerCount > 0
-              ? `还有 ${snapshot.personPanel.hiddenNewerCount} 条更新`
+            {personHiddenNewerCount > 0
+              ? `还有 ${personHiddenNewerCount} 条更新`
               : null}
           </div>
         </aside>
@@ -729,7 +780,7 @@ export default function App() {
         <section className="main-panel" onWheel={onMainWheel}>
           <div className="main-list-viewport">
             <div
-              className={`message-list ${mainListFilled ? "is-filled" : ""}`}
+              className="message-list"
               ref={mainListRef}
             >
               {snapshot.mainVisible.map((message) => (
@@ -742,20 +793,31 @@ export default function App() {
                   onClick={() => onMainMessageClick(message)}
                   onContextMenu={(event) => openMessageContextMenu(event, message, "main")}
                 >
+                  {message.messageId === snapshot.firstUnreadMessageId && (
+                    <span
+                      className="message-marker first-unread-marker"
+                      role="img"
+                      aria-label="全局最早未读"
+                      title="全局最早未读"
+                    />
+                  )}
                   <span className="meta-line">
                     {message.messageType === "superChat" && (
                       <SuperChatBadge message={message} />
                     )}
                     <WealthMedal level={message.userLevel} />
                     <FanMedal message={message} />
-                    <strong
-                      className="nickname"
-                      style={{ color: getGuardNicknameColor(message.guardType) }}
-                    >
-                      {message.nickname}
-                    </strong>
-                    <span className="message-time">
-                      {formatHhMmSs(message.timestampMs)}
+                    <span className="message-author">
+                      <strong
+                        className="nickname"
+                        style={{ color: getGuardNicknameColor(message.guardType) }}
+                        title={message.nickname}
+                      >
+                        {message.nickname}
+                      </strong>
+                      <span className="message-time">
+                        {formatHhMmSs(message.timestampMs)}
+                      </span>
                     </span>
                   </span>
                   <span className="content-line">{message.content}</span>
@@ -765,12 +827,11 @@ export default function App() {
           </div>
           <div
             className="newer-tip main-newer-tip"
-            data-visible={snapshot.mainHiddenNewerCount > 0}
-            aria-hidden={snapshot.mainHiddenNewerCount === 0}
+            data-visible={Boolean(mainNewerTip)}
+            aria-hidden={!mainNewerTip}
+            title={mainNewerTip || undefined}
           >
-            {snapshot.mainHiddenNewerCount > 0
-              ? `还有 ${snapshot.mainHiddenNewerCount} 条更新`
-              : null}
+            {mainNewerTip}
           </div>
         </section>
       </section>
@@ -813,13 +874,43 @@ export default function App() {
   );
 }
 
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+function SettingsSlider({
+  id, label, min, max, value, valueLabel, onChange
+}: {
+  id: string;
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  valueLabel: string;
+  onChange: (value: number) => void;
+}) {
+  const progress = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+  return (
+    <label className="settings-slider" htmlFor={id}>
+      <span className="settings-slider-heading">
+        <span>{label}</span>
+        <output className="settings-value" htmlFor={id}>{valueLabel}</output>
+      </span>
+      <input
+        id={id}
+        className="settings-range"
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        aria-label={label}
+        aria-valuetext={valueLabel}
+        style={{ "--range-progress": `${progress}%` } as React.CSSProperties}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
 }
 
-function cssNumber(value: string) {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+function isTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 async function copyText(text: string) {

@@ -37,6 +37,8 @@ export interface DanmuClient {
   ackMessage(messageId: number): Promise<void>;
   ackMainMessage(messageId: number): Promise<void>;
   ackUserMessages(uid: string): Promise<void>;
+  clearReadMessages(): Promise<number>;
+  clearAllMessages(): Promise<number>;
   selectUserAnchor(messageId: number): Promise<void>;
   setPersonPanelHover(value: boolean): Promise<void>;
   scrollMainViewport(delta: number): Promise<void>;
@@ -99,6 +101,8 @@ function createTauriClient(): DanmuClient {
     ackMessage: (messageId) => invoke<void>("ack_message", { messageId }),
     ackMainMessage: (messageId) => invoke<void>("ack_main_message", { messageId }),
     ackUserMessages: (uid) => invoke<void>("ack_user_messages", { uid }),
+    clearReadMessages: () => invoke<number>("clear_read_messages"),
+    clearAllMessages: () => invoke<number>("clear_all_messages"),
     selectUserAnchor: (messageId) =>
       invoke<void>("select_user_anchor", { messageId }),
     setPersonPanelHover: (value) =>
@@ -217,6 +221,16 @@ function createBrowserFallbackClient(): DanmuClient {
     async selectUserAnchor(messageId) {
       store.selectUserAnchor(messageId);
       emit();
+    },
+    async clearReadMessages() {
+      const removedCount = store.clearReadMessages();
+      emit();
+      return removedCount;
+    },
+    async clearAllMessages() {
+      const removedCount = store.clearAllMessages();
+      emit();
+      return removedCount;
     },
     async setPersonPanelHover(value) {
       store.setPersonPanelHover(value);

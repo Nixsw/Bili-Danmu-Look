@@ -49,6 +49,7 @@ export interface DanmuMessage {
 export interface PersonPanelSnapshot {
   selectedUid: string | null;
   selectedNickname: string | null;
+  selectedGuardType: GuardType | null;
   anchorMessageId: number | null;
   hoverFrozen: boolean;
   visibleMessages: DanmuMessage[];
@@ -59,7 +60,9 @@ export interface AppSnapshot {
   connected: boolean;
   connectionStatus: string;
   mainVisible: DanmuMessage[];
+  firstUnreadMessageId: number | null;
   mainHiddenNewerCount: number;
+  mainCacheNearFull: boolean;
   mainViewportRevision: number;
   mainViewportMotion: "advance" | "locate" | null;
   personPanel: PersonPanelSnapshot;

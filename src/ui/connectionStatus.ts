@@ -1,4 +1,4 @@
-const RETRY_PATTERN = /(\d+)秒后重试/;
+const RETRY_PATTERN = /\((\d+)\)$/;
 const CONNECTED_TOAST = "已连接！";
 const CONNECTED_TOAST_DURATION_MS = 5_000;
 
@@ -20,7 +20,7 @@ export function formatConnectionStatusWithCountdown(
     0,
     Math.ceil((retryDeadlineMs - nowMs) / 1000)
   );
-  return status.replace(RETRY_PATTERN, `${remainingSeconds}秒后重试`);
+  return status.replace(RETRY_PATTERN, `(${remainingSeconds})`);
 }
 
 export function getConnectedToastDeadlineMs(status: string, nowMs: number) {

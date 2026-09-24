@@ -21,6 +21,11 @@ interface ViewportSizePatch {
   personViewportSize?: number;
 }
 
+interface ViewportResizeOrigin {
+  startIndex: number;
+  pinnedToBottom: boolean;
+}
+
 const DEFAULT_MAIN_CAPACITY = 1000;
 const DEFAULT_PER_USER_CAPACITY = 50;
 
@@ -125,6 +130,8 @@ export function createMessageStore(options: MessageStoreOptions) {
   let personManualViewport = false;
   let mainViewportSize = options.mainViewportSize;
   let personViewportSize = options.personViewportSize;
+  let mainResizeOrigin: ViewportResizeOrigin | undefined;
+  let personResizeOrigin: ViewportResizeOrigin | undefined;
   let personHistoryCount = clampPersonHistoryCount(
     options.personHistoryCount ?? 1
   );
@@ -132,16 +139,18 @@ export function createMessageStore(options: MessageStoreOptions) {
   let connected = false;
   let connectionStatus = "未连接";
 
-  const mainCapacity = options.mainCapacity ?? DEFAULT_MAIN_CAPACITY;
-  const perUserCapacity = options.perUserCapacity ?? DEFAULT_PER_USER_CAPACITY;
+  const mainCapacity = Math.max(1, Math.trunc(options.mainCapacity ?? DEFAULT_MAIN_CAPACITY));
+  const perUserCapacity = Math.max(1, Math.trunc(options.perUserCapacity ?? DEFAULT_PER_USER_CAPACITY));
   const messages: DanmuMessage[] = [];
   const byId = new Map<number, DanmuMessage>();
   const idsByUid = new Map<string, number[]>();
 
   const api = {
     ingest(raw: IncomingDanmuRaw) {
-      const keepMainPinnedToBottom = isMainViewportAtBottom();
+      const keepMainPinnedToBottom = mainResizeOrigin?.pinnedToBottom ?? isMainViewportAtBottom();
+      const protectedPersonIds = getProtectedPersonIds();
       const message = normalizeIncomingDanmu(raw, nextMessageId);
+      resetResizeOrigins();
       nextMessageId += 1;
       messages.push(message);
       byId.set(message.messageId, message);
@@ -150,14 +159,13 @@ export function createMessageStore(options: MessageStoreOptions) {
       userIds.push(message.messageId);
       idsByUid.set(message.uid, userIds);
 
-      trimMainCapacity();
-      trimPerUserCapacity(message.uid);
+      trimMainCapacity(protectedPersonIds);
+      trimPerUserCapacity(message.uid, protectedPersonIds);
       if (keepMainPinnedToBottom) {
         pinMainViewportToBottom();
       } else {
         clampMainViewportStart();
       }
-      refreshPersonStartAfterDataChange(message.uid);
 
       return message;
     },
@@ -175,6 +183,7 @@ export function createMessageStore(options: MessageStoreOptions) {
       }
 
       const advancesUnread = firstUnread()?.messageId === messageId;
+      resetResizeOrigins();
       message.read = true;
       if (advancesUnread) {
         alignMainToUnread("advance");
@@ -182,6 +191,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     ackUserMessages(uid: string) {
+      resetResizeOrigins();
       const advancesUnread = firstUnread()?.uid === String(uid);
       const userIds = idsByUid.get(String(uid)) ?? [];
       for (const messageId of userIds) {
@@ -202,6 +212,52 @@ export function createMessageStore(options: MessageStoreOptions) {
       }
     },
 
+    clearReadMessages() {
+      let removedCount = 0;
+      for (let index = messages.length - 1; index >= 0; index--) {
+        const message = messages[index];
+        if (!message.read) continue;
+        messages.splice(index, 1);
+        byId.delete(message.messageId);
+        removeMessageFromUserIndex(message);
+        if (index < mainStartIndex) mainStartIndex--;
+        removedCount++;
+      }
+      if (removedCount === 0) return 0;
+      resetResizeOrigins();
+
+      // Preserve the first surviving row instead of pulling older rows into view.
+      mainStartIndex = Math.min(mainStartIndex, Math.max(0, messages.length - 1));
+      mainTopAligned = messages.length > 0;
+      mainViewportRevision++;
+      mainViewportMotion = null;
+      if (anchorMessageId !== null && !byId.has(anchorMessageId)) {
+        // Explicit cleanup may remove the anchor. Restore the nearest remaining
+        // message for this user, even if its smaller history index had evicted it.
+        const remaining = messages.filter(message => message.uid === selectedUid);
+        const next = remaining.find(message => message.messageId > anchorMessageId!) ?? remaining.at(-1);
+        if (next) api.selectUserAnchor(next.messageId);
+        else resetPersonSelection();
+      }
+      return removedCount;
+    },
+
+    clearAllMessages() {
+      resetResizeOrigins();
+      const removedCount = messages.length;
+      messages.length = 0;
+      byId.clear();
+      idsByUid.clear();
+      mainStartIndex = 0;
+      mainTopAligned = false;
+      mainViewportRevision++;
+      mainViewportMotion = null;
+      resetPersonSelection();
+      // Keep connection state and monotonically increasing IDs: delayed clicks
+      // on removed rows must never mark a newly received message as read.
+      return removedCount;
+    },
+
     selectUserAnchor(messageId: number) {
       const message = byId.get(messageId);
       if (!message) {
@@ -212,18 +268,26 @@ export function createMessageStore(options: MessageStoreOptions) {
       anchorMessageId = message.messageId;
       hoverFrozen = false;
       personManualViewport = false;
+      personResizeOrigin = undefined;
+      // The main cache can outlive this user's smaller history index.
+      const userIds = idsByUid.get(message.uid) ?? [];
+      if (!userIds.includes(messageId)) {
+        userIds.push(messageId);
+        userIds.sort((a, b) => a - b);
+        idsByUid.set(message.uid, userIds);
+      }
+      personStartIndex = computeAnchoredPersonStart();
+      trimPerUserCapacity(message.uid, getProtectedPersonIds());
       personStartIndex = computeAnchoredPersonStart();
     },
 
     setPersonPanelHover(value: boolean) {
       hoverFrozen = value;
-      if (!hoverFrozen && !personManualViewport) {
-        personStartIndex = computeAnchoredPersonStart();
-      }
     },
 
     scrollMainViewport(delta: number) {
       if (!Number.isFinite(delta) || delta === 0) return;
+      mainResizeOrigin = undefined;
       const normalMax = maxViewportStart(messages.length, mainViewportSize);
       // A wheel step from a short, top-aligned tail must not jump backwards.
       const maxStart = mainTopAligned ? Math.max(normalMax, mainStartIndex) : normalMax;
@@ -243,6 +307,7 @@ export function createMessageStore(options: MessageStoreOptions) {
         return;
       }
       personManualViewport = true;
+      personResizeOrigin = undefined;
       personStartIndex = scrollViewportStart(
         personStartIndex,
         delta,
@@ -252,6 +317,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     setPersonHistoryCount(value: number) {
+      personResizeOrigin = undefined;
       personHistoryCount = clampPersonHistoryCount(value);
       if (!personManualViewport) {
         personStartIndex = computeAnchoredPersonStart();
@@ -259,24 +325,36 @@ export function createMessageStore(options: MessageStoreOptions) {
     },
 
     setViewportSizes(patch: ViewportSizePatch) {
-      if (typeof patch.mainViewportSize === "number") {
-        const keepMainPinnedToBottom = isMainViewportAtBottom();
+      if (typeof patch.mainViewportSize === "number" &&
+          clampViewportSize(patch.mainViewportSize) !== mainViewportSize) {
+        mainResizeOrigin ??= {
+          startIndex: mainStartIndex,
+          pinnedToBottom: isMainViewportAtBottom()
+        };
         mainViewportSize = clampViewportSize(patch.mainViewportSize);
-        if (keepMainPinnedToBottom) {
+        if (mainResizeOrigin.pinnedToBottom) {
           pinMainViewportToBottom();
         } else {
+          mainStartIndex = mainResizeOrigin.startIndex;
           clampMainViewportStart();
         }
       }
 
-      if (typeof patch.personViewportSize === "number") {
+      if (typeof patch.personViewportSize === "number" &&
+          clampViewportSize(patch.personViewportSize) !== personViewportSize) {
+        const userCount = getSelectedUserIds().length;
+        personResizeOrigin ??= {
+          startIndex: personStartIndex,
+          pinnedToBottom: userCount > 0 &&
+            personStartIndex >= maxViewportStart(userCount, personViewportSize)
+        };
         personViewportSize = clampViewportSize(patch.personViewportSize);
         if (personManualViewport) {
-          personStartIndex = clampViewportStart(
-            personStartIndex,
-            getSelectedUserIds().length,
-            personViewportSize
-          );
+          // Keep the original alignment across probes, even if a candidate
+          // temporarily reaches the tail or prepends older history.
+          personStartIndex = personResizeOrigin.pinnedToBottom
+            ? maxViewportStart(userCount, personViewportSize)
+            : clampViewportStart(personResizeOrigin.startIndex, userCount, personViewportSize);
         } else {
           personStartIndex = computeAnchoredPersonStart();
         }
@@ -297,6 +375,7 @@ export function createMessageStore(options: MessageStoreOptions) {
 
     getPersonPanel(): PersonPanelSnapshot {
       const userIds = getSelectedUserIds();
+      const selectedMessage = getSelectedLatestMessage();
       const visibleIds = userIds.slice(
         personStartIndex,
         personStartIndex + personViewportSize
@@ -307,7 +386,8 @@ export function createMessageStore(options: MessageStoreOptions) {
 
       return {
         selectedUid,
-        selectedNickname: getSelectedNickname(),
+        selectedNickname: selectedMessage?.nickname ?? null,
+        selectedGuardType: selectedMessage?.guardType ?? null,
         anchorMessageId,
         hoverFrozen,
         visibleMessages,
@@ -323,7 +403,9 @@ export function createMessageStore(options: MessageStoreOptions) {
         connected,
         connectionStatus,
         mainVisible: api.getMainVisible(),
+        firstUnreadMessageId: firstUnread()?.messageId ?? null,
         mainHiddenNewerCount: getMainHiddenNewerCount(),
+        mainCacheNearFull: messages.filter((message) => !message.read).length >= Math.ceil(mainCapacity * 0.9),
         mainViewportRevision,
         mainViewportMotion,
         personPanel: api.getPersonPanel()
@@ -331,17 +413,39 @@ export function createMessageStore(options: MessageStoreOptions) {
     }
   };
 
-  function trimMainCapacity() {
-    while (messages.length > mainCapacity) {
-      const removed = messages.shift();
-      if (!removed) {
-        break;
-      }
-      if (removed.messageId !== anchorMessageId) {
-        byId.delete(removed.messageId);
-        removeMessageFromUserIndex(removed);
-      }
-      mainStartIndex = Math.max(0, mainStartIndex - 1);
+  function resetResizeOrigins() {
+    mainResizeOrigin = undefined;
+    personResizeOrigin = undefined;
+  }
+
+  function resetPersonSelection() {
+    selectedUid = null;
+    anchorMessageId = null;
+    personStartIndex = 0;
+    personManualViewport = false;
+    personResizeOrigin = undefined;
+    hoverFrozen = false;
+  }
+
+  function trimMainCapacity(protectedPersonIds: Set<number>) {
+    if (messages.length < mainCapacity || messages.length <= 1) return;
+    const targetSize = Math.max(1, mainCapacity - Math.ceil(mainCapacity / 10));
+    const latestId = messages[messages.length - 1].messageId;
+    // Keep the anchor; prefer offscreen rows, then oldest read rows before unread.
+    const candidates = messages.filter((message) => message.messageId !== anchorMessageId);
+    candidates.sort((a, b) =>
+      Number(protectedPersonIds.has(a.messageId) || a.messageId === latestId) -
+        Number(protectedPersonIds.has(b.messageId) || b.messageId === latestId) ||
+      Number(b.read) - Number(a.read) || a.messageId - b.messageId
+    );
+    const removedIds = new Set(candidates.slice(0, messages.length - targetSize).map((message) => message.messageId));
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      if (!removedIds.has(message.messageId)) continue;
+      messages.splice(index, 1);
+      byId.delete(message.messageId);
+      removeMessageFromUserIndex(message);
+      if (index < mainStartIndex) mainStartIndex--;
     }
   }
 
@@ -361,57 +465,48 @@ export function createMessageStore(options: MessageStoreOptions) {
       personStartIndex = Math.max(0, personStartIndex - 1);
     }
     if (message.uid === selectedUid) {
-      personStartIndex = clampViewportStart(
-        personStartIndex,
-        userIds.length,
-        personViewportSize
-      );
+      personStartIndex = Math.min(personStartIndex, Math.max(0, userIds.length - 1));
     }
+    if (userIds.length === 0) idsByUid.delete(message.uid);
   }
 
-  function trimPerUserCapacity(uid: string) {
+  function trimPerUserCapacity(uid: string, protectedPersonIds: Set<number>) {
     const userIds = idsByUid.get(uid);
     if (!userIds) {
       return;
     }
 
     while (userIds.length > perUserCapacity) {
-      const removeIndex = getPerUserTrimIndex(uid, userIds);
+      const removeIndex = getPerUserTrimIndex(uid, userIds, protectedPersonIds);
       userIds.splice(removeIndex, 1);
-      if (removeIndex < personStartIndex) {
-        personStartIndex = Math.max(0, personStartIndex - 1);
+      if (uid === selectedUid) {
+        if (removeIndex < personStartIndex) personStartIndex--;
+        personStartIndex = Math.min(personStartIndex, Math.max(0, userIds.length - 1));
       }
-      personStartIndex = clampViewportStart(
-        personStartIndex,
-        userIds.length,
-        personViewportSize
-      );
     }
   }
 
-  function getPerUserTrimIndex(uid: string, userIds: number[]) {
+  function getPerUserTrimIndex(uid: string, userIds: number[], protectedPersonIds: Set<number>) {
     if (selectedUid !== uid || !anchorMessageId) {
       return 0;
     }
 
-    if (!userIds.includes(anchorMessageId)) {
-      return 0;
-    }
-
+    // Reserve the newest arrival too; if the entire tiny cache is visible,
+    // the hard capacity still wins, while the selected anchor is never removed.
+    const offscreenIndex = userIds.findIndex((id, index) =>
+      index < userIds.length - 1 && !protectedPersonIds.has(id)
+    );
+    if (offscreenIndex >= 0) return offscreenIndex;
     const firstNonAnchorIndex = userIds.findIndex(
       (messageId) => messageId !== anchorMessageId
     );
     return firstNonAnchorIndex >= 0 ? firstNonAnchorIndex : 0;
   }
 
-  function refreshPersonStartAfterDataChange(uid: string) {
-    if (selectedUid !== uid || !anchorMessageId) {
-      return;
-    }
-
-    if (!hoverFrozen && !personManualViewport) {
-      personStartIndex = computeAnchoredPersonStart();
-    }
+  function getProtectedPersonIds() {
+    const ids = new Set(getSelectedUserIds().slice(personStartIndex, personStartIndex + personViewportSize));
+    if (anchorMessageId !== null) ids.add(anchorMessageId);
+    return ids;
   }
 
   function isMainViewportAtBottom() {
@@ -437,6 +532,7 @@ export function createMessageStore(options: MessageStoreOptions) {
   }
 
   function alignMainToUnread(motion: NonNullable<AppSnapshot["mainViewportMotion"]>) {
+    mainResizeOrigin = undefined;
     const index = messages.findIndex((message) => !message.read);
     const previousStart = mainStartIndex;
     mainTopAligned = index >= 0;
@@ -453,7 +549,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     return selectedUid ? (idsByUid.get(selectedUid) ?? []) : [];
   }
 
-  function getSelectedNickname() {
+  function getSelectedLatestMessage() {
     if (!selectedUid) {
       return null;
     }
@@ -462,7 +558,7 @@ export function createMessageStore(options: MessageStoreOptions) {
     for (let index = userIds.length - 1; index >= 0; index -= 1) {
       const message = byId.get(userIds[index]);
       if (message) {
-        return message.nickname;
+        return message;
       }
     }
 

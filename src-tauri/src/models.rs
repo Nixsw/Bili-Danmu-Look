@@ -63,6 +63,7 @@ pub struct DanmuMessage {
 pub struct PersonPanelSnapshot {
     pub selected_uid: Option<String>,
     pub selected_nickname: Option<String>,
+    pub selected_guard_type: Option<u8>,
     pub anchor_message_id: Option<u64>,
     pub hover_frozen: bool,
     pub visible_messages: Vec<DanmuMessage>,
@@ -75,7 +76,9 @@ pub struct AppSnapshot {
     pub connected: bool,
     pub connection_status: String,
     pub main_visible: Vec<DanmuMessage>,
+    pub first_unread_message_id: Option<u64>,
     pub main_hidden_newer_count: usize,
+    pub main_cache_near_full: bool,
     pub main_viewport_revision: u64,
     pub main_viewport_motion: Option<MainViewportMotion>,
     pub person_panel: PersonPanelSnapshot,
