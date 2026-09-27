@@ -412,13 +412,13 @@ input {
 }
 
 .content-grid.is-splitting {
-  cursor: col-resize;
+  cursor: ew-resize;
   user-select: none;
   transition: none;
 }
 
 .content-grid.is-splitting * {
-  cursor: col-resize !important;
+  cursor: ew-resize !important;
   user-select: none;
 }
 
@@ -432,7 +432,7 @@ input {
   z-index: 4;
   width: 14px;
   transform: translateX(-50%);
-  cursor: col-resize;
+  cursor: ew-resize;
   touch-action: none;
 }
 
