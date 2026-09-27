@@ -406,6 +406,8 @@ input {
   position: relative;
   display: grid;
   grid-template-columns: var(--person-panel-width) minmax(0, var(--main-panel-width));
+  -webkit-user-select: none;
+  user-select: none;
   transition: grid-template-columns 160ms ease;
 }
 
@@ -753,7 +755,7 @@ input {
   width: 36px;
   height: 16px;
   margin-right: -1px;
-  cursor: pointer;
+  cursor: inherit;
   vertical-align: middle;
 }
 
@@ -783,7 +785,7 @@ input {
   padding: 2px 6px 2px 2px;
   border-radius: 8px;
   color: #fff;
-  cursor: default;
+  cursor: inherit;
   font-family:
     "Microsoft YaHei",
     "Microsoft Sans Serif",

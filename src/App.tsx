@@ -491,13 +491,16 @@ export default function App() {
   };
 
   const startWindowDrag = (event: React.MouseEvent<HTMLElement>) => {
-    if (!isTauriRuntime() || event.button !== 0) {
+    if (!isTauriRuntime() || event.button !== 0 || event.defaultPrevented) {
       return;
     }
-    const target = event.target as HTMLElement;
-    if (target.closest("button,input,textarea,select,a")) {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest(
+      "button,input,textarea,select,a,[role='separator'],[contenteditable]:not([contenteditable='false'])"
+    )) {
       return;
     }
+    event.preventDefault();
     getCurrentWindow().startDragging().catch(() => undefined);
   };
 
@@ -699,6 +702,7 @@ export default function App() {
       <section
         ref={contentGridRef}
         className={`content-grid ${splitDragging ? "is-splitting" : ""}`}
+        onMouseDown={startWindowDrag}
       >
         <aside
           className="person-panel"
@@ -712,7 +716,6 @@ export default function App() {
                 {snapshot.personPanel.selectedUid}
               </span>
               <strong
-                title={snapshot.personPanel.selectedNickname ?? undefined}
                 style={{
                   color: snapshot.personPanel.selectedGuardType === null
                     ? undefined
@@ -821,7 +824,6 @@ export default function App() {
                       <strong
                         className="nickname"
                         style={{ color: getGuardNicknameColor(message.guardType) }}
-                        title={message.nickname}
                       >
                         {message.nickname}
                       </strong>
@@ -975,11 +977,11 @@ function WealthMedal({ level }: { level: number }) {
   }
 
   return (
-    <span className="wealth-medal-ctnr" title="这是 TA 的荣耀等级勋章">
+    <span className="wealth-medal-ctnr">
       <img
         className="wealth-medal"
         src={src}
-        alt={`UL${Math.trunc(level)}`}
+        alt={`荣耀等级 ${Math.trunc(level)}`}
         draggable={false}
       />
     </span>
@@ -1000,7 +1002,8 @@ function FanMedal({ message }: { message: DanmuMessage }) {
   return (
     <span
       className="fans-medal-item"
-      title="这是 TA 的粉丝勋章"
+      role="img"
+      aria-label={`粉丝团等级 ${message.fanLevel}`}
       style={
         {
           ...getFanMedalStyle(message.fanLevel, message.fanMedalColors),
