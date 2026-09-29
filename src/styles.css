@@ -84,6 +84,7 @@ input {
 .drag-title > span:first-child {
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 12em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

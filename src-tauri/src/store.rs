@@ -35,6 +35,7 @@ pub struct MessageStore {
     hover_frozen: bool,
     connected: bool,
     connection_status: String,
+    anchor_name: Option<String>,
     messages: VecDeque<DanmuMessage>,
     by_id: HashMap<u64, DanmuMessage>,
     ids_by_uid: HashMap<String, VecDeque<u64>>,
@@ -62,6 +63,7 @@ impl MessageStore {
             hover_frozen: false,
             connected: false,
             connection_status: "未连接".to_string(),
+            anchor_name: None,
             messages: VecDeque::new(),
             by_id: HashMap::new(),
             ids_by_uid: HashMap::new(),
@@ -342,10 +344,15 @@ impl MessageStore {
         self.connected = connected;
     }
 
+    pub fn set_anchor_name(&mut self, anchor_name: Option<String>) {
+        self.anchor_name = anchor_name;
+    }
+
     pub fn snapshot(&self) -> AppSnapshot {
         AppSnapshot {
             connected: self.connected,
             connection_status: self.connection_status.clone(),
+            anchor_name: self.anchor_name.clone(),
             main_visible: self.main_visible(),
             first_unread_message_id: self.first_unread().map(|message| message.message_id),
             main_hidden_newer_count: self.main_hidden_newer_count(),
@@ -886,6 +893,29 @@ mod tests {
         assert_eq!(store.snapshot().first_unread_message_id, None);
         store.ingest(raw("F", 3, 6)).unwrap();
         assert_eq!(store.snapshot().first_unread_message_id, Some(6));
+    }
+
+    #[test]
+    fn snapshot_serializes_optional_anchor_name_and_message_cleanup_preserves_it() {
+        let mut store = MessageStore::new(1000, 50);
+        assert_eq!(
+            serde_json::to_value(store.snapshot()).unwrap()["anchorName"],
+            serde_json::Value::Null
+        );
+
+        store.set_anchor_name(Some("阿萨Aza".to_string()));
+        store.ingest(raw("A", 1, 1)).unwrap();
+        store.clear_all_messages();
+        assert_eq!(
+            serde_json::to_value(store.snapshot()).unwrap()["anchorName"],
+            "阿萨Aza"
+        );
+
+        store.set_anchor_name(None);
+        assert_eq!(
+            serde_json::to_value(store.snapshot()).unwrap()["anchorName"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

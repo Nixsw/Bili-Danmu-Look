@@ -14,6 +14,15 @@ afterEach(() => {
 });
 
 describe("browser display configuration", () => {
+  it("publishes no anchor name in the browser preview", async () => {
+    const client = createDanmuClient();
+    const onSnapshot = vi.fn();
+    const dispose = await client.init(onSnapshot);
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ anchorName: null }));
+    expect(invoke).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it("round trips both reference opacity endpoints and all five font sizes", async () => {
     const client = createDanmuClient();
     expect(await client.getConfig()).toMatchObject({ opacity: 0.82, fontSize: 14 });

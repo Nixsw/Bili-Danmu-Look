@@ -402,6 +402,7 @@ export function createMessageStore(options: MessageStoreOptions) {
       return {
         connected,
         connectionStatus,
+        anchorName: null,
         mainVisible: api.getMainVisible(),
         firstUnreadMessageId: firstUnread()?.messageId ?? null,
         mainHiddenNewerCount: getMainHiddenNewerCount(),

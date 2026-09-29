@@ -27,6 +27,8 @@ import {
 } from "./ui/biliBadges";
 import {
   getMainUnreadAnchorAction,
+  getSystemWindowTitle,
+  getWindowDisplayTitle,
   getWindowDismissAction
 } from "./ui/windowActions";
 import {
@@ -49,6 +51,7 @@ import "./styles.css";
 const initialSnapshot: AppSnapshot = {
   connected: false,
   connectionStatus: "启动中",
+  anchorName: null,
   mainVisible: [],
   firstUnreadMessageId: null,
   mainHiddenNewerCount: 0,
@@ -76,6 +79,8 @@ interface MessageContextMenuState {
 export default function App() {
   const client = useMemo(() => createDanmuClient(), []);
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const windowTitle = getWindowDisplayTitle(snapshot.anchorName);
+  const systemWindowTitle = getSystemWindowTitle(snapshot.anchorName);
   const [config, setConfig] = useState<DisplayConfig>({
     connectApiUrl: "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect",
     opacity: 0.82,
@@ -122,6 +127,10 @@ export default function App() {
   const [splitDragging, setSplitDragging] = useState(false);
   const [messageContextMenu, setMessageContextMenu] =
     useState<MessageContextMenuState | null>(null);
+
+  useEffect(() => {
+    document.title = systemWindowTitle;
+  }, [systemWindowTitle]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -577,7 +586,7 @@ export default function App() {
         onMouseDown={startWindowDrag}
       >
         <div className="drag-title">
-          <span>看弹幕工具</span>
+          <span>{windowTitle}</span>
           <button
             className="icon-button settings-button"
             title="设置"

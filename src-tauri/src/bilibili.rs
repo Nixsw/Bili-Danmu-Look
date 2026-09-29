@@ -29,6 +29,7 @@ pub struct ConnectInfo {
     pub uid: u64,
     pub room_id: u64,
     pub wsurl: String,
+    pub anchor_name: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -182,12 +183,19 @@ pub fn parse_connect_api_response(text: &str) -> Result<ConnectInfo, String> {
         ],
     )
     .ok_or_else(|| "连接接口 room_id 无效".to_string())?;
+    let anchor_name = ["anchor_name", "data.anchor_name"]
+        .iter()
+        .filter_map(|path| value_at_path(&response, path).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_owned);
 
     Ok(ConnectInfo {
         token,
         uid,
         room_id,
         wsurl,
+        anchor_name,
     })
 }
 
@@ -886,6 +894,7 @@ mod tests {
         assert_eq!(info.uid, 10001);
         assert_eq!(info.room_id, 23058);
         assert_eq!(info.wsurl, "wss://broadcastlv.chat.bilibili.com/sub");
+        assert_eq!(info.anchor_name, None);
         let array_info = parse_connect_api_response(
             r#"{
                 "token": "danmu-token",
@@ -939,6 +948,49 @@ mod tests {
     }
 
     #[test]
+    fn parses_optional_anchor_name_from_top_level_or_wrapped_response() {
+        for (metadata, expected) in [
+            (json!({ "anchor_name": "  阿萨Aza  " }), Some("阿萨Aza")),
+            (
+                json!({ "data": { "anchor_name": "另一位主播" } }),
+                Some("另一位主播"),
+            ),
+            (
+                json!({ "anchor_name": "优先顶层", "data": { "anchor_name": "包装字段" } }),
+                Some("优先顶层"),
+            ),
+            (json!({}), None),
+            (json!({ "anchor_name": " \t\n " }), None),
+            (json!({ "anchor_name": null }), None),
+            (json!({ "anchor_name": 123 }), None),
+            (json!({ "anchor_name": true }), None),
+        ] {
+            let mut response = json!({
+                "token": "test-token",
+                "mid": 10001,
+                "room_id": 23058,
+                "wsurl": "wss://example.test/sub"
+            });
+            response
+                .as_object_mut()
+                .unwrap()
+                .extend(metadata.as_object().unwrap().clone());
+
+            let info = parse_connect_api_response(&response.to_string()).unwrap();
+
+            assert_eq!(info.anchor_name.as_deref(), expected);
+            assert_eq!(info.uid, 10001);
+            assert_eq!(info.room_id, 23058);
+        }
+
+        let wrapped = parse_connect_api_response(
+            r#"{"data":{"token":"test-token","mid":10001,"room_id":23058,"wsurl":"wss://example.test/sub","anchor_name":"  包装主播  "}}"#,
+        )
+        .unwrap();
+        assert_eq!(wrapped.anchor_name.as_deref(), Some("包装主播"));
+    }
+
+    #[test]
     fn does_not_apply_local_cooldown_after_connect_api_failure() {
         let last_request = Instant::now();
 
@@ -960,6 +1012,7 @@ mod tests {
             uid: 1,
             room_id: 2,
             wsurl: "wss://example.test/sub".to_string(),
+            anchor_name: None,
         };
 
         assert!(cached_connect_info_during_cooldown(
@@ -985,6 +1038,7 @@ mod tests {
                 uid: 1,
                 room_id: 2,
                 wsurl: "wss://example.test/sub".to_string(),
+                anchor_name: None,
             }),
         };
 
