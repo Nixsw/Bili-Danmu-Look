@@ -160,12 +160,17 @@ pub async fn connect_ws_inner(app: AppHandle, state: &State<'_, AppState>) -> Re
 
 fn start_user_connection(store: &mut MessageStore) -> String {
     store.set_anchor_name(None);
+    store.set_anchor_images(None, None);
     store.set_connection("对接中...", false);
     format_app_title(None)
 }
 
 fn complete_room_connection(store: &mut MessageStore, connect_info: &ConnectInfo) -> String {
     store.set_anchor_name(connect_info.anchor_name.clone());
+    store.set_anchor_images(
+        connect_info.anchor_avatar_url.clone(),
+        connect_info.anchor_avatar_frame_url.clone(),
+    );
     store.set_connection("已连接！", true);
     format_app_title(connect_info.anchor_name.as_deref())
 }
@@ -294,7 +299,12 @@ mod tests {
     }
 
     #[test]
-    fn successful_connections_replace_anchor_name_and_new_sessions_clear_it() {
+    fn successful_connections_replace_anchor_profile_and_new_sessions_clear_it() {
+        let assert_images = |store: &MessageStore, avatar: Option<&str>, frame: Option<&str>| {
+            let snapshot = store.snapshot();
+            assert_eq!(snapshot.anchor_avatar_url.as_deref(), avatar);
+            assert_eq!(snapshot.anchor_avatar_frame_url.as_deref(), frame);
+        };
         let mut store = MessageStore::new(1000, 50);
         let mut info = ConnectInfo {
             token: "test-token".to_string(),
@@ -302,6 +312,8 @@ mod tests {
             room_id: 23058,
             wsurl: "wss://example.test/sub".to_string(),
             anchor_name: Some("首位主播".to_string()),
+            anchor_avatar_url: Some("https://example.test/avatar-a.jpg".to_string()),
+            anchor_avatar_frame_url: Some("https://example.test/frame-a.png".to_string()),
         };
 
         assert_eq!(
@@ -310,27 +322,46 @@ mod tests {
         );
         assert_eq!(store.snapshot().anchor_name.as_deref(), Some("首位主播"));
         assert_eq!(store.snapshot().connection_status, "已连接！");
+        assert_images(
+            &store,
+            Some("https://example.test/avatar-a.jpg"),
+            Some("https://example.test/frame-a.png"),
+        );
 
         store.set_connection("对接中...", false);
         assert_eq!(store.snapshot().anchor_name.as_deref(), Some("首位主播"));
+        assert_images(
+            &store,
+            Some("https://example.test/avatar-a.jpg"),
+            Some("https://example.test/frame-a.png"),
+        );
         info.anchor_name = Some("另一位主播".to_string());
+        info.anchor_avatar_url = Some("https://example.test/avatar-b.jpg".to_string());
+        info.anchor_avatar_frame_url = None;
         assert_eq!(
             complete_room_connection(&mut store, &info),
             "另一位主播 - 小小鱼弹幕"
         );
         assert_eq!(store.snapshot().anchor_name.as_deref(), Some("另一位主播"));
+        assert_images(&store, Some("https://example.test/avatar-b.jpg"), None);
 
         info.anchor_name = None;
+        info.anchor_avatar_url = None;
+        info.anchor_avatar_frame_url = None;
         assert_eq!(
             complete_room_connection(&mut store, &info),
             "看弹幕工具 - 小小鱼弹幕"
         );
         assert_eq!(store.snapshot().anchor_name, None);
+        assert_images(&store, None, None);
 
         info.anchor_name = Some("首位主播".to_string());
+        info.anchor_avatar_url = Some("https://example.test/avatar-a.jpg".to_string());
+        info.anchor_avatar_frame_url = Some("https://example.test/frame-a.png".to_string());
         complete_room_connection(&mut store, &info);
         assert_eq!(start_user_connection(&mut store), "看弹幕工具 - 小小鱼弹幕");
         assert_eq!(store.snapshot().anchor_name, None);
+        assert_images(&store, None, None);
         assert_eq!(store.snapshot().connection_status, "对接中...");
         assert!(!store.snapshot().connected);
     }
@@ -352,6 +383,10 @@ mod tests {
             .unwrap()
             .store
             .set_anchor_name(Some("已连接主播".to_string()));
+        inner.lock().unwrap().store.set_anchor_images(
+            Some("https://example.test/avatar.jpg".to_string()),
+            Some("https://example.test/frame.png".to_string()),
+        );
         let started = Instant::now();
         let mut emitted_at = None;
         wait_before_retry(&inner, started, "接口.解析异常", 3, || {
@@ -370,6 +405,15 @@ mod tests {
                     .anchor_name
                     .as_deref(),
                 Some("已连接主播")
+            );
+            let snapshot = inner.lock().unwrap().store.snapshot();
+            assert_eq!(
+                snapshot.anchor_avatar_url.as_deref(),
+                Some("https://example.test/avatar.jpg")
+            );
+            assert_eq!(
+                snapshot.anchor_avatar_frame_url.as_deref(),
+                Some("https://example.test/frame.png")
             );
         })
         .await;

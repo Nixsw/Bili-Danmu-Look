@@ -46,12 +46,15 @@ import {
 } from "./ui/contextMenu";
 import { applyConnectApiUrl, getMessageSizeLabel } from "./ui/settingsPanel";
 import { createMainListMotion } from "./ui/mainListMotion";
+import { AnchorAvatar } from "./ui/AnchorAvatar";
 import "./styles.css";
 
 const initialSnapshot: AppSnapshot = {
   connected: false,
   connectionStatus: "启动中",
   anchorName: null,
+  anchorAvatarUrl: null,
+  anchorAvatarFrameUrl: null,
   mainVisible: [],
   firstUnreadMessageId: null,
   mainHiddenNewerCount: 0,
@@ -586,7 +589,12 @@ export default function App() {
         onMouseDown={startWindowDrag}
       >
         <div className="drag-title">
-          <span>{windowTitle}</span>
+          <AnchorAvatar
+            key={`${snapshot.anchorAvatarUrl ?? ""}\n${snapshot.anchorAvatarFrameUrl ?? ""}`}
+            avatarUrl={snapshot.anchorAvatarUrl}
+            frameUrl={snapshot.anchorAvatarFrameUrl}
+          />
+          <span className="window-title-label">{windowTitle}</span>
           <button
             className="icon-button settings-button"
             title="设置"

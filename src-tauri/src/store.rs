@@ -36,6 +36,8 @@ pub struct MessageStore {
     connected: bool,
     connection_status: String,
     anchor_name: Option<String>,
+    anchor_avatar_url: Option<String>,
+    anchor_avatar_frame_url: Option<String>,
     messages: VecDeque<DanmuMessage>,
     by_id: HashMap<u64, DanmuMessage>,
     ids_by_uid: HashMap<String, VecDeque<u64>>,
@@ -64,6 +66,8 @@ impl MessageStore {
             connected: false,
             connection_status: "未连接".to_string(),
             anchor_name: None,
+            anchor_avatar_url: None,
+            anchor_avatar_frame_url: None,
             messages: VecDeque::new(),
             by_id: HashMap::new(),
             ids_by_uid: HashMap::new(),
@@ -348,11 +352,22 @@ impl MessageStore {
         self.anchor_name = anchor_name;
     }
 
+    pub fn set_anchor_images(
+        &mut self,
+        avatar_url: Option<String>,
+        avatar_frame_url: Option<String>,
+    ) {
+        self.anchor_avatar_url = avatar_url;
+        self.anchor_avatar_frame_url = avatar_frame_url;
+    }
+
     pub fn snapshot(&self) -> AppSnapshot {
         AppSnapshot {
             connected: self.connected,
             connection_status: self.connection_status.clone(),
             anchor_name: self.anchor_name.clone(),
+            anchor_avatar_url: self.anchor_avatar_url.clone(),
+            anchor_avatar_frame_url: self.anchor_avatar_frame_url.clone(),
             main_visible: self.main_visible(),
             first_unread_message_id: self.first_unread().map(|message| message.message_id),
             main_hidden_newer_count: self.main_hidden_newer_count(),
@@ -896,26 +911,37 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_serializes_optional_anchor_name_and_message_cleanup_preserves_it() {
+    fn snapshot_serializes_optional_anchor_profile_and_message_cleanup_preserves_it() {
         let mut store = MessageStore::new(1000, 50);
-        assert_eq!(
-            serde_json::to_value(store.snapshot()).unwrap()["anchorName"],
-            serde_json::Value::Null
-        );
+        let empty = serde_json::to_value(store.snapshot()).unwrap();
+        for field in ["anchorName", "anchorAvatarUrl", "anchorAvatarFrameUrl"] {
+            assert_eq!(empty.get(field), Some(&serde_json::Value::Null));
+        }
 
         store.set_anchor_name(Some("阿萨Aza".to_string()));
+        store.set_anchor_images(
+            Some("https://example.test/avatar.jpg".to_string()),
+            Some("https://example.test/frame.png".to_string()),
+        );
         store.ingest(raw("A", 1, 1)).unwrap();
         store.clear_all_messages();
+        let populated = serde_json::to_value(store.snapshot()).unwrap();
+        assert_eq!(populated["anchorName"], "阿萨Aza");
         assert_eq!(
-            serde_json::to_value(store.snapshot()).unwrap()["anchorName"],
-            "阿萨Aza"
+            populated["anchorAvatarUrl"],
+            "https://example.test/avatar.jpg"
+        );
+        assert_eq!(
+            populated["anchorAvatarFrameUrl"],
+            "https://example.test/frame.png"
         );
 
         store.set_anchor_name(None);
-        assert_eq!(
-            serde_json::to_value(store.snapshot()).unwrap()["anchorName"],
-            serde_json::Value::Null
-        );
+        store.set_anchor_images(None, None);
+        let cleared = serde_json::to_value(store.snapshot()).unwrap();
+        for field in ["anchorName", "anchorAvatarUrl", "anchorAvatarFrameUrl"] {
+            assert_eq!(cleared.get(field), Some(&serde_json::Value::Null));
+        }
     }
 
     #[test]

@@ -14,11 +14,15 @@ afterEach(() => {
 });
 
 describe("browser display configuration", () => {
-  it("publishes no anchor name in the browser preview", async () => {
+  it("publishes no anchor metadata in the browser preview", async () => {
     const client = createDanmuClient();
     const onSnapshot = vi.fn();
     const dispose = await client.init(onSnapshot);
-    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ anchorName: null }));
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      anchorName: null,
+      anchorAvatarUrl: null,
+      anchorAvatarFrameUrl: null
+    }));
     expect(invoke).not.toHaveBeenCalled();
     dispose();
   });

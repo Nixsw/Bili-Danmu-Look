@@ -30,6 +30,8 @@ pub struct ConnectInfo {
     pub room_id: u64,
     pub wsurl: String,
     pub anchor_name: Option<String>,
+    pub anchor_avatar_url: Option<String>,
+    pub anchor_avatar_frame_url: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -189,6 +191,12 @@ pub fn parse_connect_api_response(text: &str) -> Result<ConnectInfo, String> {
         .map(str::trim)
         .find(|value| !value.is_empty())
         .map(str::to_owned);
+    let anchor_avatar_url =
+        http_url_at_paths(&response, &["anchor_avatar_url", "data.anchor_avatar_url"]);
+    let anchor_avatar_frame_url = http_url_at_paths(
+        &response,
+        &["anchor_avatar_frame_url", "data.anchor_avatar_frame_url"],
+    );
 
     Ok(ConnectInfo {
         token,
@@ -196,7 +204,21 @@ pub fn parse_connect_api_response(text: &str) -> Result<ConnectInfo, String> {
         room_id,
         wsurl,
         anchor_name,
+        anchor_avatar_url,
+        anchor_avatar_frame_url,
     })
+}
+
+fn http_url_at_paths(root: &Value, paths: &[&str]) -> Option<String> {
+    paths
+        .iter()
+        .filter_map(|path| value_at_path(root, path).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| {
+            (value.starts_with("http://") || value.starts_with("https://"))
+                && Url::parse(value).is_ok_and(|url| url.has_host())
+        })
+        .map(str::to_owned)
 }
 
 fn string_at_paths(root: &Value, paths: &[&str]) -> Option<String> {
@@ -895,6 +917,8 @@ mod tests {
         assert_eq!(info.room_id, 23058);
         assert_eq!(info.wsurl, "wss://broadcastlv.chat.bilibili.com/sub");
         assert_eq!(info.anchor_name, None);
+        assert_eq!(info.anchor_avatar_url, None);
+        assert_eq!(info.anchor_avatar_frame_url, None);
         let array_info = parse_connect_api_response(
             r#"{
                 "token": "danmu-token",
@@ -991,6 +1015,75 @@ mod tests {
     }
 
     #[test]
+    fn parses_optional_anchor_images_from_top_level_or_wrapped_response() {
+        let top_level = parse_connect_api_response(
+            r#"{
+                "token":"test-token", "mid":10001, "room_id":23058,
+                "wsurl":"wss://example.test/sub",
+                "anchor_avatar_url":"  https://example.test/avatar.jpg  ",
+                "anchor_avatar_frame_url":"",
+                "data":{"anchor_avatar_url":"https://example.test/other.jpg"}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            top_level.anchor_avatar_url.as_deref(),
+            Some("https://example.test/avatar.jpg")
+        );
+        assert_eq!(top_level.anchor_avatar_frame_url, None);
+
+        let wrapped = parse_connect_api_response(
+            r#"{"data":{
+                "token":"test-token", "mid":10001, "room_id":23058,
+                "wsurl":"wss://example.test/sub",
+                "anchor_avatar_url":"http://example.test/avatar.jpg",
+                "anchor_avatar_frame_url":"  https://example.test/frame.png  "
+            }}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            wrapped.anchor_avatar_url.as_deref(),
+            Some("http://example.test/avatar.jpg")
+        );
+        assert_eq!(
+            wrapped.anchor_avatar_frame_url.as_deref(),
+            Some("https://example.test/frame.png")
+        );
+    }
+
+    #[test]
+    fn invalid_anchor_images_do_not_break_legacy_connection_fields() {
+        for value in [
+            json!(null),
+            json!(123),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!(" \t\n "),
+            json!("relative/avatar.jpg"),
+            json!("//example.test/avatar.jpg"),
+            json!("https://"),
+            json!("file:///avatar.jpg"),
+            json!("data:image/png;base64,AA=="),
+            json!("javascript:alert(1)"),
+        ] {
+            let response = json!({
+                "token": "test-token", "mid": 10001, "room_id": 23058,
+                "wsurl": "wss://example.test/sub",
+                "anchor_avatar_url": value,
+                "anchor_avatar_frame_url": value
+            });
+            let info = parse_connect_api_response(&response.to_string()).unwrap();
+
+            assert_eq!(info.anchor_avatar_url, None);
+            assert_eq!(info.anchor_avatar_frame_url, None);
+            assert_eq!(info.uid, 10001);
+            assert_eq!(info.room_id, 23058);
+        }
+    }
+
+    #[test]
     fn does_not_apply_local_cooldown_after_connect_api_failure() {
         let last_request = Instant::now();
 
@@ -1013,6 +1106,8 @@ mod tests {
             room_id: 2,
             wsurl: "wss://example.test/sub".to_string(),
             anchor_name: None,
+            anchor_avatar_url: None,
+            anchor_avatar_frame_url: None,
         };
 
         assert!(cached_connect_info_during_cooldown(
@@ -1039,6 +1134,8 @@ mod tests {
                 room_id: 2,
                 wsurl: "wss://example.test/sub".to_string(),
                 anchor_name: None,
+                anchor_avatar_url: None,
+                anchor_avatar_frame_url: None,
             }),
         };
 
