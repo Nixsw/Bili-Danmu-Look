@@ -472,6 +472,9 @@ input {
 }
 
 .panel-splitter {
+  /* Use a subtle overlay on the already translucent window surface. */
+  --splitter-surface-opacity: min(0.2, var(--glass-opacity));
+  --splitter-icon-opacity: min(0.25, var(--glass-opacity));
   grid-column: 1 / -1;
   grid-row: 1;
   position: absolute;
@@ -492,8 +495,8 @@ input {
   left: 50%;
   width: 1px;
   transform: translateX(-50%);
-  background: #121315;
-  opacity: var(--glass-opacity);
+  background: #000;
+  opacity: var(--splitter-surface-opacity);
   content: "";
 }
 
@@ -501,6 +504,7 @@ input {
 .content-grid.is-splitting .panel-splitter::before {
   width: 3px;
   background: var(--bili-pink);
+  opacity: var(--glass-opacity);
 }
 
 .splitter-grip {
@@ -513,8 +517,8 @@ input {
   place-items: center;
   transform: translate(-50%, -50%);
   border-radius: 2px;
-  color: #54565b;
-  background: rgba(23, 24, 26, var(--glass-opacity));
+  color: rgba(255, 255, 255, var(--splitter-icon-opacity));
+  background: rgba(0, 0, 0, var(--splitter-surface-opacity));
 }
 
 .panel-splitter:hover .splitter-grip {
