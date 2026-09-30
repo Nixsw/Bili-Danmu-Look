@@ -75,6 +75,9 @@ pub struct PersonPanelSnapshot {
 pub struct AppSnapshot {
     pub connected: bool,
     pub connection_status: String,
+    pub anchor_name: Option<String>,
+    pub anchor_avatar_url: Option<String>,
+    pub anchor_avatar_frame_url: Option<String>,
     pub main_visible: Vec<DanmuMessage>,
     pub first_unread_message_id: Option<u64>,
     pub main_hidden_newer_count: usize,

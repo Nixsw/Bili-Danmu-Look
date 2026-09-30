@@ -59,6 +59,9 @@ export interface PersonPanelSnapshot {
 export interface AppSnapshot {
   connected: boolean;
   connectionStatus: string;
+  anchorName: string | null;
+  anchorAvatarUrl: string | null;
+  anchorAvatarFrameUrl: string | null;
   mainVisible: DanmuMessage[];
   firstUnreadMessageId: number | null;
   mainHiddenNewerCount: number;

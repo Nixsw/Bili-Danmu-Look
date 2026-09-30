@@ -24,7 +24,28 @@ use window_state::{
     current_window_action, recover_offscreen_window, show_main_window, WindowAction,
 };
 
-const APP_DISPLAY_TITLE: &str = "读弹幕工具 - 小小鱼";
+const APP_DISPLAY_TITLE: &str = "小小鱼弹幕";
+const DEFAULT_WINDOW_TITLE: &str = "看弹幕工具 - 小小鱼弹幕";
+const APP_TRAY_ID: &str = "main-tray";
+
+pub(crate) fn format_app_title(anchor_name: Option<&str>) -> String {
+    match anchor_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name} - {APP_DISPLAY_TITLE}"),
+        None => DEFAULT_WINDOW_TITLE.to_string(),
+    }
+}
+
+pub(crate) fn sync_app_title(app: &tauri::AppHandle, title: &str) -> tauri::Result<()> {
+    let window_result = match app.get_webview_window("main") {
+        Some(window) => window.set_title(title),
+        None => Ok(()),
+    };
+    let tray_result = match app.tray_by_id(APP_TRAY_ID) {
+        Some(tray) => tray.set_tooltip(Some(title)),
+        None => Ok(()),
+    };
+    window_result.and(tray_result)
+}
 
 pub struct AppState {
     pub inner: Arc<Mutex<RuntimeState>>,
@@ -55,6 +76,7 @@ pub fn run() {
             apply_main_window_config(app, &runtime_state)?;
             persist_main_window_geometry(app, runtime_state)?;
             setup_tray(app)?;
+            sync_app_title(app.handle(), DEFAULT_WINDOW_TITLE)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -87,7 +109,7 @@ fn ensure_main_window(app: &tauri::App) -> tauri::Result<()> {
     }
 
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("DanmuTools")
+        .title(DEFAULT_WINDOW_TITLE)
         .inner_size(600.0, 780.0)
         .min_inner_size(420.0, 520.0)
         .decorations(false)
@@ -211,14 +233,14 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     }
     let refresh_after_action = refresh_label.clone();
 
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id(APP_TRAY_ID)
         .menu(&menu)
         .icon(
             app.default_window_icon()
                 .cloned()
                 .expect("configured default window icon should exist"),
         )
-        .tooltip(APP_DISPLAY_TITLE)
+        .tooltip(DEFAULT_WINDOW_TITLE)
         .title(APP_DISPLAY_TITLE)
         // Refresh on hover / button-down too, before Windows opens the menu on button-up.
         // This also covers hidden windows and monitor changes that emitted no window event.
@@ -267,8 +289,17 @@ mod tests {
     }
 
     #[test]
-    fn tray_uses_requested_display_title() {
-        assert_eq!(APP_DISPLAY_TITLE, "读弹幕工具 - 小小鱼");
+    fn native_title_uses_anchor_name_and_requested_product_name() {
+        assert_eq!(format_app_title(None), "看弹幕工具 - 小小鱼弹幕");
+        assert_eq!(format_app_title(Some(" \t\n ")), "看弹幕工具 - 小小鱼弹幕");
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri config should be valid JSON");
+        assert_eq!(config["app"]["windows"][0]["title"], format_app_title(None));
+        assert_eq!(format_app_title(Some(" 阿萨Aza ")), "阿萨Aza - 小小鱼弹幕");
+        assert_eq!(
+            format_app_title(Some("这是一位昵称超过十二个汉字的主播")),
+            "这是一位昵称超过十二个汉字的主播 - 小小鱼弹幕"
+        );
     }
 
     #[test]

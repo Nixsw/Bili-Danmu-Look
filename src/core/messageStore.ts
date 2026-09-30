@@ -402,6 +402,9 @@ export function createMessageStore(options: MessageStoreOptions) {
       return {
         connected,
         connectionStatus,
+        anchorName: null,
+        anchorAvatarUrl: null,
+        anchorAvatarFrameUrl: null,
         mainVisible: api.getMainVisible(),
         firstUnreadMessageId: firstUnread()?.messageId ?? null,
         mainHiddenNewerCount: getMainHiddenNewerCount(),

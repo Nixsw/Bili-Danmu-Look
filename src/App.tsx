@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
+  ChevronsLeftRight,
   LocateFixed,
   Minus,
   Settings
@@ -8,6 +9,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createDanmuClient, type DisplayConfig } from "./api/client";
 import type { AppSnapshot, DanmuMessage } from "./core/types";
+import { MESSAGE_SIZE_PRESETS } from "./core/displaySettings";
 import { formatHhMmSs, formatMmSs, getGuardNicknameColor } from "./ui/format";
 import {
   getSplitLayout,
@@ -25,6 +27,8 @@ import {
 } from "./ui/biliBadges";
 import {
   getMainUnreadAnchorAction,
+  getSystemWindowTitle,
+  getWindowDisplayTitle,
   getWindowDismissAction
 } from "./ui/windowActions";
 import {
@@ -42,11 +46,15 @@ import {
 } from "./ui/contextMenu";
 import { applyConnectApiUrl, getMessageSizeLabel } from "./ui/settingsPanel";
 import { createMainListMotion } from "./ui/mainListMotion";
+import { AnchorAvatar } from "./ui/AnchorAvatar";
 import "./styles.css";
 
 const initialSnapshot: AppSnapshot = {
   connected: false,
   connectionStatus: "启动中",
+  anchorName: null,
+  anchorAvatarUrl: null,
+  anchorAvatarFrameUrl: null,
   mainVisible: [],
   firstUnreadMessageId: null,
   mainHiddenNewerCount: 0,
@@ -74,6 +82,8 @@ interface MessageContextMenuState {
 export default function App() {
   const client = useMemo(() => createDanmuClient(), []);
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const windowTitle = getWindowDisplayTitle(snapshot.anchorName);
+  const systemWindowTitle = getSystemWindowTitle(snapshot.anchorName);
   const [config, setConfig] = useState<DisplayConfig>({
     connectApiUrl: "http://127.0.0.1:2333/api/v1/external/danmu-reader/connect",
     opacity: 0.82,
@@ -120,6 +130,10 @@ export default function App() {
   const [splitDragging, setSplitDragging] = useState(false);
   const [messageContextMenu, setMessageContextMenu] =
     useState<MessageContextMenuState | null>(null);
+
+  useEffect(() => {
+    document.title = systemWindowTitle;
+  }, [systemWindowTitle]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -369,7 +383,7 @@ export default function App() {
   );
   const mainUnreadAnchorAction = getMainUnreadAnchorAction();
   const windowDismissAction = getWindowDismissAction();
-  const backgroundTransparency = Math.round((1 - config.opacity) * 100);
+  const backgroundOpacity = Math.round(config.opacity * 100);
 
   const updateConfig = async (patch: Partial<DisplayConfig>) => {
     if (patch.personHistoryCount !== undefined) measurePersonCapacity.reset();
@@ -489,13 +503,16 @@ export default function App() {
   };
 
   const startWindowDrag = (event: React.MouseEvent<HTMLElement>) => {
-    if (!isTauriRuntime() || event.button !== 0) {
+    if (!isTauriRuntime() || event.button !== 0 || event.defaultPrevented) {
       return;
     }
-    const target = event.target as HTMLElement;
-    if (target.closest("button,input,textarea,select,a")) {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest(
+      "button,input,textarea,select,a,[role='separator'],[contenteditable]:not([contenteditable='false'])"
+    )) {
       return;
     }
+    event.preventDefault();
     getCurrentWindow().startDragging().catch(() => undefined);
   };
 
@@ -572,7 +589,12 @@ export default function App() {
         onMouseDown={startWindowDrag}
       >
         <div className="drag-title">
-          <span>看弹幕工具</span>
+          <AnchorAvatar
+            key={`${snapshot.anchorAvatarUrl ?? ""}\n${snapshot.anchorAvatarFrameUrl ?? ""}`}
+            avatarUrl={snapshot.anchorAvatarUrl}
+            frameUrl={snapshot.anchorAvatarFrameUrl}
+          />
+          <span className="window-title-label">{windowTitle}</span>
           <button
             className="icon-button settings-button"
             title="设置"
@@ -610,7 +632,7 @@ export default function App() {
 
       {settingsOpen && (
         <section className="settings-popover">
-          <div className="settings-connection">
+          <div className="settings-group settings-connection" role="group" aria-label="接口配置">
             <label htmlFor="connect-api-url">接口地址</label>
             <div className="settings-connection-row">
               <input
@@ -637,34 +659,38 @@ export default function App() {
               <p className="settings-status" role="status">{connectApiSaveStatus}</p>
             )}
           </div>
-          <SettingsSlider
-            id="background-transparency"
-            label="背景透明度"
-            min={2}
-            max={55}
-            value={backgroundTransparency}
-            valueLabel={`${backgroundTransparency}%`}
-            onChange={(value) => updateConfig({ opacity: (100 - value) / 100 })}
-          />
-          <SettingsSlider
-            id="message-size"
-            label="消息显示大小"
-            min={12}
-            max={18}
-            value={config.fontSize}
-            valueLabel={`${getMessageSizeLabel(config.fontSize)} · ${config.fontSize}`}
-            onChange={(value) => updateConfig({ fontSize: value })}
-          />
-          <SettingsSlider
-            id="person-history-count"
-            label="左侧默认展示历史条数"
-            min={0}
-            max={3}
-            value={config.personHistoryCount}
-            valueLabel={`${config.personHistoryCount} 条`}
-            onChange={(value) => updateConfig({ personHistoryCount: value })}
-          />
-          <div className="settings-clear-section">
+          <div className="settings-group settings-appearance" role="group" aria-label="外观">
+            <SettingsSlider
+              id="background-opacity"
+              label="不透明度"
+              min={10}
+              max={100}
+              value={backgroundOpacity}
+              valueLabel={`${backgroundOpacity}%`}
+              onChange={(value) => updateConfig({ opacity: value / 100 })}
+            />
+            <SettingsSlider
+              id="message-size"
+              label="字号大小"
+              min={10}
+              max={18}
+              step={2}
+              ticks={MESSAGE_SIZE_PRESETS.map((preset) => preset.value)}
+              value={config.fontSize}
+              valueLabel={getMessageSizeLabel(config.fontSize)}
+              onChange={(value) => updateConfig({ fontSize: value })}
+            />
+            <SettingsSlider
+              id="person-history-count"
+              label="左侧默认展示历史条数"
+              min={0}
+              max={3}
+              value={config.personHistoryCount}
+              valueLabel={`${config.personHistoryCount} 条`}
+              onChange={(value) => updateConfig({ personHistoryCount: value })}
+            />
+          </div>
+          <div className="settings-group settings-clear-section" role="group" aria-label="清除消息">
             <div className="settings-clear-actions">
               <button
                 type="button"
@@ -693,6 +719,7 @@ export default function App() {
       <section
         ref={contentGridRef}
         className={`content-grid ${splitDragging ? "is-splitting" : ""}`}
+        onMouseDown={startWindowDrag}
       >
         <aside
           className="person-panel"
@@ -706,7 +733,6 @@ export default function App() {
                 {snapshot.personPanel.selectedUid}
               </span>
               <strong
-                title={snapshot.personPanel.selectedNickname ?? undefined}
                 style={{
                   color: snapshot.personPanel.selectedGuardType === null
                     ? undefined
@@ -774,7 +800,11 @@ export default function App() {
             aria-orientation="vertical"
             title="拖动调整两栏宽度"
             onPointerDown={onSplitterPointerDown}
-          />
+          >
+            <span className="splitter-grip" aria-hidden="true">
+              <ChevronsLeftRight size={12} strokeWidth={1.5} />
+            </span>
+          </div>
         )}
 
         <section className="main-panel" onWheel={onMainWheel}>
@@ -811,7 +841,6 @@ export default function App() {
                       <strong
                         className="nickname"
                         style={{ color: getGuardNicknameColor(message.guardType) }}
-                        title={message.nickname}
                       >
                         {message.nickname}
                       </strong>
@@ -875,12 +904,14 @@ export default function App() {
 }
 
 function SettingsSlider({
-  id, label, min, max, value, valueLabel, onChange
+  id, label, min, max, step = 1, ticks, value, valueLabel, onChange
 }: {
   id: string;
   label: string;
   min: number;
   max: number;
+  step?: number;
+  ticks?: readonly number[];
   value: number;
   valueLabel: string;
   onChange: (value: number) => void;
@@ -888,23 +919,35 @@ function SettingsSlider({
   const progress = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
   return (
     <label className="settings-slider" htmlFor={id}>
-      <span className="settings-slider-heading">
-        <span>{label}</span>
+      <span>{label}</span>
+      <span className="settings-slider-row">
+        <span className="settings-range-control">
+          <input
+            id={id}
+            className="settings-range"
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            aria-label={label}
+            aria-valuetext={valueLabel}
+            style={{ "--range-progress": `${progress}%` } as React.CSSProperties}
+            onChange={(event) => onChange(Number(event.target.value))}
+          />
+          {ticks && (
+            <span className="settings-range-ticks" aria-hidden="true">
+              {ticks.map((tick) => (
+                <span
+                  key={tick}
+                  style={{ left: `${((tick - min) / (max - min)) * 100}%` }}
+                />
+              ))}
+            </span>
+          )}
+        </span>
         <output className="settings-value" htmlFor={id}>{valueLabel}</output>
       </span>
-      <input
-        id={id}
-        className="settings-range"
-        type="range"
-        min={min}
-        max={max}
-        step={1}
-        value={value}
-        aria-label={label}
-        aria-valuetext={valueLabel}
-        style={{ "--range-progress": `${progress}%` } as React.CSSProperties}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
     </label>
   );
 }
@@ -951,11 +994,11 @@ function WealthMedal({ level }: { level: number }) {
   }
 
   return (
-    <span className="wealth-medal-ctnr" title="这是 TA 的荣耀等级勋章">
+    <span className="wealth-medal-ctnr">
       <img
         className="wealth-medal"
         src={src}
-        alt={`UL${Math.trunc(level)}`}
+        alt={`荣耀等级 ${Math.trunc(level)}`}
         draggable={false}
       />
     </span>
@@ -976,7 +1019,8 @@ function FanMedal({ message }: { message: DanmuMessage }) {
   return (
     <span
       className="fans-medal-item"
-      title="这是 TA 的粉丝勋章"
+      role="img"
+      aria-label={`粉丝团等级 ${message.fanLevel}`}
       style={
         {
           ...getFanMedalStyle(message.fanLevel, message.fanMedalColors),

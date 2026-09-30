@@ -1,9 +1,10 @@
 use crate::bilibili::{
     build_enter_packet, build_heartbeat_packet, clear_cached_connect_info_after_ws_failure,
-    decode_frame, is_http_connect_api_url, resolve_connect_info,
+    decode_frame, is_http_connect_api_url, resolve_connect_info, ConnectInfo,
 };
 use crate::commands::emit_snapshot;
-use crate::AppState;
+use crate::store::MessageStore;
+use crate::{format_app_title, sync_app_title, AppState};
 use futures_util::{SinkExt, StreamExt};
 use tauri::{AppHandle, State};
 use tokio::time::{sleep, timeout, Duration, Instant};
@@ -41,11 +42,12 @@ enum ConnectionFailure {
 pub async fn connect_ws_inner(app: AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
     disconnect_ws_inner(state)?;
 
-    let url = {
+    let (url, title) = {
         let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-        inner.store.set_connection("对接中...", false);
-        inner.config.connect_api_url.clone()
+        let title = start_user_connection(&mut inner.store);
+        (inner.config.connect_api_url.clone(), title)
     };
+    let _ = sync_app_title(&app, &title);
     let connect_cache = state.connect_cache.clone();
     emit_snapshot(&app, state)?;
 
@@ -112,8 +114,11 @@ pub async fn connect_ws_inner(app: AppHandle, state: &State<'_, AppState>) -> Re
                                     if let Ok(frame) = decode_frame(&data) {
                                         if frame.room_enter_response {
                                             backoff.reset();
-                                            if let Ok(mut inner) = inner_state.lock() {
-                                                inner.store.set_connection("已连接！", true);
+                                            let title = inner_state.lock().ok().map(|mut inner| {
+                                                complete_room_connection(&mut inner.store, &connect_info)
+                                            });
+                                            if let Some(title) = title {
+                                                let _ = sync_app_title(&app_for_task, &title);
                                             }
                                         }
                                         for event in frame.events {
@@ -151,6 +156,23 @@ pub async fn connect_ws_inner(app: AppHandle, state: &State<'_, AppState>) -> Re
     let mut guard = state.ws_task.lock().map_err(|error| error.to_string())?;
     *guard = Some(task);
     Ok(())
+}
+
+fn start_user_connection(store: &mut MessageStore) -> String {
+    store.set_anchor_name(None);
+    store.set_anchor_images(None, None);
+    store.set_connection("对接中...", false);
+    format_app_title(None)
+}
+
+fn complete_room_connection(store: &mut MessageStore, connect_info: &ConnectInfo) -> String {
+    store.set_anchor_name(connect_info.anchor_name.clone());
+    store.set_anchor_images(
+        connect_info.anchor_avatar_url.clone(),
+        connect_info.anchor_avatar_frame_url.clone(),
+    );
+    store.set_connection("已连接！", true);
+    format_app_title(connect_info.anchor_name.as_deref())
 }
 
 async fn wait_before_retry(
@@ -276,6 +298,74 @@ mod tests {
         assert_eq!(backoff.next_delay_seconds(), 5);
     }
 
+    #[test]
+    fn successful_connections_replace_anchor_profile_and_new_sessions_clear_it() {
+        let assert_images = |store: &MessageStore, avatar: Option<&str>, frame: Option<&str>| {
+            let snapshot = store.snapshot();
+            assert_eq!(snapshot.anchor_avatar_url.as_deref(), avatar);
+            assert_eq!(snapshot.anchor_avatar_frame_url.as_deref(), frame);
+        };
+        let mut store = MessageStore::new(1000, 50);
+        let mut info = ConnectInfo {
+            token: "test-token".to_string(),
+            uid: 10001,
+            room_id: 23058,
+            wsurl: "wss://example.test/sub".to_string(),
+            anchor_name: Some("首位主播".to_string()),
+            anchor_avatar_url: Some("https://example.test/avatar-a.jpg".to_string()),
+            anchor_avatar_frame_url: Some("https://example.test/frame-a.png".to_string()),
+        };
+
+        assert_eq!(
+            complete_room_connection(&mut store, &info),
+            "首位主播 - 小小鱼弹幕"
+        );
+        assert_eq!(store.snapshot().anchor_name.as_deref(), Some("首位主播"));
+        assert_eq!(store.snapshot().connection_status, "已连接！");
+        assert_images(
+            &store,
+            Some("https://example.test/avatar-a.jpg"),
+            Some("https://example.test/frame-a.png"),
+        );
+
+        store.set_connection("对接中...", false);
+        assert_eq!(store.snapshot().anchor_name.as_deref(), Some("首位主播"));
+        assert_images(
+            &store,
+            Some("https://example.test/avatar-a.jpg"),
+            Some("https://example.test/frame-a.png"),
+        );
+        info.anchor_name = Some("另一位主播".to_string());
+        info.anchor_avatar_url = Some("https://example.test/avatar-b.jpg".to_string());
+        info.anchor_avatar_frame_url = None;
+        assert_eq!(
+            complete_room_connection(&mut store, &info),
+            "另一位主播 - 小小鱼弹幕"
+        );
+        assert_eq!(store.snapshot().anchor_name.as_deref(), Some("另一位主播"));
+        assert_images(&store, Some("https://example.test/avatar-b.jpg"), None);
+
+        info.anchor_name = None;
+        info.anchor_avatar_url = None;
+        info.anchor_avatar_frame_url = None;
+        assert_eq!(
+            complete_room_connection(&mut store, &info),
+            "看弹幕工具 - 小小鱼弹幕"
+        );
+        assert_eq!(store.snapshot().anchor_name, None);
+        assert_images(&store, None, None);
+
+        info.anchor_name = Some("首位主播".to_string());
+        info.anchor_avatar_url = Some("https://example.test/avatar-a.jpg".to_string());
+        info.anchor_avatar_frame_url = Some("https://example.test/frame-a.png".to_string());
+        complete_room_connection(&mut store, &info);
+        assert_eq!(start_user_connection(&mut store), "看弹幕工具 - 小小鱼弹幕");
+        assert_eq!(store.snapshot().anchor_name, None);
+        assert_images(&store, None, None);
+        assert_eq!(store.snapshot().connection_status, "对接中...");
+        assert!(!store.snapshot().connected);
+    }
+
     fn runtime() -> Arc<Mutex<crate::RuntimeState>> {
         let mut store = crate::store::MessageStore::new(1000, 50);
         store.set_connection("对接中...", false);
@@ -288,6 +378,15 @@ mod tests {
     #[tokio::test]
     async fn fast_failure_keeps_connecting_for_one_second_then_waits_the_full_retry_delay() {
         let inner = runtime();
+        inner
+            .lock()
+            .unwrap()
+            .store
+            .set_anchor_name(Some("已连接主播".to_string()));
+        inner.lock().unwrap().store.set_anchor_images(
+            Some("https://example.test/avatar.jpg".to_string()),
+            Some("https://example.test/frame.png".to_string()),
+        );
         let started = Instant::now();
         let mut emitted_at = None;
         wait_before_retry(&inner, started, "接口.解析异常", 3, || {
@@ -296,6 +395,25 @@ mod tests {
             assert_eq!(
                 inner.lock().unwrap().store.snapshot().connection_status,
                 "接口.解析异常(3)"
+            );
+            assert_eq!(
+                inner
+                    .lock()
+                    .unwrap()
+                    .store
+                    .snapshot()
+                    .anchor_name
+                    .as_deref(),
+                Some("已连接主播")
+            );
+            let snapshot = inner.lock().unwrap().store.snapshot();
+            assert_eq!(
+                snapshot.anchor_avatar_url.as_deref(),
+                Some("https://example.test/avatar.jpg")
+            );
+            assert_eq!(
+                snapshot.anchor_avatar_frame_url.as_deref(),
+                Some("https://example.test/frame.png")
             );
         })
         .await;
