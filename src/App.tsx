@@ -50,6 +50,7 @@ import { AnchorAvatar } from "./ui/AnchorAvatar";
 import "./styles.css";
 
 const initialSnapshot: AppSnapshot = {
+  snapshotSequence: "0",
   connected: false,
   connectionStatus: "启动中",
   anchorName: null,

@@ -33,7 +33,7 @@
 
 运行需要 WebView2 Runtime（微软网页视图运行时）。**直接使用发布包无需安装开发工具链。**
 
-当前源码版本为 **1.5.0**，可下载的版本与附件以发布页为准。
+当前源码版本为 **1.5.1**，可下载的版本与附件以发布页为准。
 
 ### 2. 对接弹幕服务
 
@@ -145,13 +145,13 @@ npm run dev
 | `npm run tauri:build` | 桌面程序与安装包构建 |
 | `npm run package:portable` | 将已构建的正式程序打包为便携压缩包 |
 
-1.5.0 的本地构建产物：
+1.5.1 的本地构建产物：
 
 ```text
 src-tauri/target/release/danmu-tools.exe
-src-tauri/target/release/bundle/nsis/DanmuTools_1.5.0_x64-setup.exe
-src-tauri/target/release/bundle/msi/DanmuTools_1.5.0_x64_zh-CN.msi
-src-tauri/target/release/bundle/portable/DanmuTools_1.5.0_x64_portable.zip
+src-tauri/target/release/bundle/nsis/DanmuTools_1.5.1_x64-setup.exe
+src-tauri/target/release/bundle/msi/DanmuTools_1.5.1_x64_zh-CN.msi
+src-tauri/target/release/bundle/portable/DanmuTools_1.5.1_x64_portable.zip
 ```
 
 ### 标准消息格式

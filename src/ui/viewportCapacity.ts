@@ -139,6 +139,14 @@ export function createViewportCapacityTracker() {
       const usedHeight = input.rowHeights.reduce((total, height) => total + height, 0)
         + Math.max(0, input.rowHeights.length - 1) * input.gap
         + input.paddingTop + input.paddingBottom;
+      // A failed prepend can leave a limit at the surviving first row. Later
+      // arrivals may form a larger, fully measured slice that now fits there.
+      // A shorter remainder alone cannot disprove the old overflow limit.
+      const overflowLimit = overflowLimits.get(firstId);
+      if (overflowLimit !== undefined && input.rowIds.length > overflowLimit &&
+          input.rowHeights.length === input.rowIds.length && usedHeight <= input.containerHeight) {
+        overflowLimits.delete(firstId);
+      }
       if (input.containerHeight - usedHeight >= input.gap + input.minRowHeight) {
         capacity = Math.min(input.max ?? 100, Math.max(capacity, input.rowHeights.length + 1));
       }

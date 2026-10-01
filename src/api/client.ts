@@ -74,20 +74,31 @@ function isTauriRuntime() {
 function createTauriClient(): DanmuClient {
   return {
     async init(onSnapshot) {
+      let disposed = false;
+      let lastSequence = -1n;
+      const receiveSnapshot = (snapshot: AppSnapshot) => {
+        if (disposed) return;
+        const sequence = BigInt(snapshot.snapshotSequence);
+        if (sequence <= lastSequence) return;
+        lastSequence = sequence;
+        onSnapshot(snapshot);
+      };
       const snapshot = await invoke<AppSnapshot>("get_snapshot");
-      onSnapshot(snapshot);
+      receiveSnapshot(snapshot);
       const poll = window.setInterval(() => {
         invoke<AppSnapshot>("get_snapshot")
-          .then(onSnapshot)
+          .then(receiveSnapshot)
           .catch(() => undefined);
       }, 500);
       let unlisten: UnlistenFn | undefined;
-      listen<AppSnapshot>("danmu_state_changed", (event) => onSnapshot(event.payload))
+      listen<AppSnapshot>("danmu_state_changed", (event) => receiveSnapshot(event.payload))
         .then((dispose) => {
-          unlisten = dispose;
+          if (disposed) dispose();
+          else unlisten = dispose;
         })
         .catch(() => undefined);
       return () => {
+        disposed = true;
         window.clearInterval(poll);
         unlisten?.();
       };
@@ -139,6 +150,7 @@ function createBrowserFallbackClient(): DanmuClient {
       seedPreviewMessages();
       emit();
       return () => {
+        onChange = () => undefined;
         socket?.close();
       };
     },

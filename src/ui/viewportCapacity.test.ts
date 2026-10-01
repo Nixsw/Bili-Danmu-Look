@@ -187,6 +187,29 @@ describe("createViewportCapacityTracker", () => {
     expect(measure.getVisibleRange()).toEqual({ start: 1, end: 3 });
   });
 
+  test.each([
+    { paddingBottom: 3, expected: 3 },
+    { paddingBottom: 4, expected: 2 }
+  ])("replaces a prepend limit only when the complete larger candidate fits including padding: %o", ({ paddingBottom, expected }) => {
+    const measure = createViewportCapacityTracker();
+    const paddedLayout = { ...layout, containerHeight: 300, paddingTop: 3, paddingBottom };
+    measure({ ...paddedLayout, rowIds: ["9", "10"], rowHeights: [60, 160] });
+    measure({ ...paddedLayout, rowIds: ["8", "9", "10"], rowHeights: [260, 60, 160] });
+    expect(measure({
+      ...paddedLayout, rowIds: ["9", "10", "11"], rowHeights: [60, 160, 60]
+    })).toBe(expected);
+    expect(measure.getVisibleRange()).toEqual({ start: 0, end: expected });
+  });
+
+  test("does not discard a prepend limit with an unmeasured candidate row", () => {
+    const measure = createViewportCapacityTracker();
+    measure({ ...layout, containerHeight: 300, rowIds: ["9", "10"], rowHeights: [60, 160] });
+    measure({ ...layout, containerHeight: 300, rowIds: ["8", "9", "10"], rowHeights: [260, 60, 160] });
+    expect(measure({
+      ...layout, containerHeight: 300, rowIds: ["9", "10", "11"], rowHeights: [60, 160]
+    })).toBe(2);
+  });
+
   test("initial selection paints the anchor while an oversized history slice is corrected", () => {
     const measure = createViewportCapacityTracker();
     expect(measure({

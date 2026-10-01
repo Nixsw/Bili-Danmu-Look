@@ -57,6 +57,8 @@ export interface PersonPanelSnapshot {
 }
 
 export interface AppSnapshot {
+  // Capture order across all snapshot sources; decimal text preserves u64 precision.
+  snapshotSequence: string;
   connected: boolean;
   connectionStatus: string;
   anchorName: string | null;

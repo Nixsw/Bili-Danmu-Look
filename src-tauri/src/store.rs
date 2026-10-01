@@ -3,6 +3,10 @@ use crate::models::{
     PersonPanelSnapshot,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Process-wide so clearing, reconnecting, or replacing a store cannot rewind it.
+static NEXT_SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
 mod cache_tests;
@@ -362,7 +366,16 @@ impl MessageStore {
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
+        // All runtime callers hold the RuntimeState mutex through this capture.
+        // Assign before releasing that lock, never when the result is emitted.
+        let sequence = NEXT_SNAPSHOT_SEQUENCE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("snapshot sequence exhausted");
         AppSnapshot {
+            // A decimal string avoids precision loss in JavaScript above 2^53.
+            snapshot_sequence: sequence.to_string(),
             connected: self.connected,
             connection_status: self.connection_status.clone(),
             anchor_name: self.anchor_name.clone(),
@@ -874,6 +887,60 @@ mod tests {
 
         store.set_viewport_sizes(Some(3), None);
         assert_eq!(main_contents(&store), ["H", "I", "J"]);
+    }
+
+    #[test]
+    fn snapshot_sequences_order_captures_even_without_main_viewport_motion() {
+        let mut store = MessageStore::new(1000, 50);
+        let sequence = |snapshot: AppSnapshot| {
+            let serialized = serde_json::to_value(snapshot).unwrap();
+            serialized["snapshotSequence"]
+                .as_str()
+                .expect("snapshot sequence must be a decimal string")
+                .parse::<u64>()
+                .unwrap()
+        };
+        let first = store.snapshot();
+        let revision = first.main_viewport_revision;
+        let first_sequence = sequence(first);
+        store.ingest(raw("A", 1, 1)).unwrap();
+        store.set_viewport_sizes(Some(3), Some(2));
+        store.select_user_anchor(1);
+        let changed = store.snapshot();
+        assert_eq!(changed.main_viewport_revision, revision);
+        let changed_sequence = sequence(changed);
+        assert!(changed_sequence > first_sequence);
+        assert!(sequence(store.snapshot()) > changed_sequence);
+    }
+
+    #[test]
+    fn snapshot_sequences_do_not_reset_after_clear_reconnect_or_store_replacement() {
+        let mut store = MessageStore::new(1000, 50);
+        store.ingest(raw("A", 1, 1)).unwrap();
+        let sequence = |snapshot: AppSnapshot| {
+            serde_json::to_value(snapshot).unwrap()["snapshotSequence"]
+                .as_str()
+                .expect("snapshot sequence must be a decimal string")
+                .parse::<u64>()
+                .unwrap()
+        };
+        let before = sequence(store.snapshot());
+        store.ack_message(1);
+        store.clear_read_messages();
+        let after_read_cleanup = sequence(store.snapshot());
+        store.clear_all_messages();
+        let after_clear = sequence(store.snapshot());
+        store.set_connection("已断开", false);
+        store.set_connection("对接中...", false);
+        store.set_connection("已连接！", true);
+        let after_reconnect = sequence(store.snapshot());
+        store = MessageStore::new(1000, 50);
+        let after_replacement = sequence(store.snapshot());
+
+        assert!(after_read_cleanup > before);
+        assert!(after_clear > after_read_cleanup);
+        assert!(after_reconnect > after_clear);
+        assert!(after_replacement > after_reconnect);
     }
 
     #[test]

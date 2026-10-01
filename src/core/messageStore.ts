@@ -28,6 +28,8 @@ interface ViewportResizeOrigin {
 
 const DEFAULT_MAIN_CAPACITY = 1000;
 const DEFAULT_PER_USER_CAPACITY = 50;
+// Keep capture order across store recreation for the lifetime of this runtime.
+let nextSnapshotSequence = 1n;
 
 export function normalizeIncomingDanmu(
   raw: IncomingDanmuRaw,
@@ -400,6 +402,7 @@ export function createMessageStore(options: MessageStoreOptions) {
 
     getSnapshot(): AppSnapshot {
       return {
+        snapshotSequence: (nextSnapshotSequence++).toString(),
         connected,
         connectionStatus,
         anchorName: null,

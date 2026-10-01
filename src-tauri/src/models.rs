@@ -73,6 +73,7 @@ pub struct PersonPanelSnapshot {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSnapshot {
+    pub snapshot_sequence: String,
     pub connected: bool,
     pub connection_status: String,
     pub anchor_name: Option<String>,
